@@ -1,17 +1,21 @@
 import React, { useEffect, useState } from 'react';
 import {
+  Calendar,
+  Clock,
+  Crown,
   Download,
   Eye,
   Heart,
   LogIn,
   LogOut,
+  ShieldAlert,
   ShieldCheck,
   Trash2,
   User,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { usePlatformData } from '../context/PlatformDataContext.tsx';
-import { LectureFile } from '../types/academic.ts';
+import { LectureFile, ROLE_LABELS_AR } from '../types/academic.ts';
 import {
   canDownloadFile,
   canPreviewInApp,
@@ -19,6 +23,19 @@ import {
   getPublishedSpecializations,
   getYearsForSpecialization,
 } from '../utils/academicLogic.ts';
+
+function formatAccountDate(raw: unknown): string {
+  if (!raw) return 'غير مسجل';
+  if (typeof raw === 'string') {
+    const d = new Date(raw);
+    return Number.isNaN(d.getTime()) ? raw : d.toLocaleDateString('ar-EG');
+  }
+  if (typeof raw === 'object' && raw !== null && 'seconds' in raw) {
+    const sec = Number((raw as { seconds: number }).seconds);
+    return new Date(sec * 1000).toLocaleDateString('ar-EG');
+  }
+  return 'حديثاً';
+}
 
 export function ProfileView({
   onOpenAdmin,
@@ -32,25 +49,32 @@ export function ProfileView({
   const {
     firebaseUser,
     profile,
-    isAdmin,
+    role,
+    accountStatus,
+    isSuperAdmin,
+    isStaff,
     authLoading,
     authError,
     favoriteIds,
-    signInWithGoogle,
+    openLoginModal,
     logout,
     toggleFavorite,
-    updateAcademicPreference,
+    updateProfileInfo,
   } = useAuth();
   const { specializations, academicYears, lectureFiles, subjects } = usePlatformData();
 
+  const [displayNameInput, setDisplayNameInput] = useState(
+    profile?.displayName || firebaseUser?.displayName || ''
+  );
   const [prefSpecId, setPrefSpecId] = useState(profile?.specializationId || '');
   const [prefYearId, setPrefYearId] = useState(profile?.academicYearId || '');
   const [savedNotice, setSavedNotice] = useState(false);
 
   useEffect(() => {
+    setDisplayNameInput(profile?.displayName || firebaseUser?.displayName || '');
     setPrefSpecId(profile?.specializationId || '');
     setPrefYearId(profile?.academicYearId || '');
-  }, [profile]);
+  }, [profile, firebaseUser]);
 
   const publishedSpecs = getPublishedSpecializations(specializations);
   const yearsForSpec = prefSpecId
@@ -63,7 +87,11 @@ export function ProfileView({
 
   const handleSavePrefs = async (e: React.FormEvent) => {
     e.preventDefault();
-    await updateAcademicPreference(prefSpecId, prefYearId);
+    await updateProfileInfo({
+      displayName: displayNameInput || profile?.displayName || 'طالب UST',
+      specializationId: prefSpecId,
+      academicYearId: prefYearId,
+    });
     setSavedNotice(true);
     setTimeout(() => setSavedNotice(false), 2500);
   };
@@ -83,29 +111,39 @@ export function ProfileView({
                   حساب الطالب والمفضلة
                 </h1>
                 <p className="text-sm text-slate-600 mt-1">
-                  سجّل الدخول بحسابك الجامعي لحفظ المحاضرات في المفضلة وتحديد تخصصك الدراسي.
+                  سجّل الدخول بحساب Google لحفظ المحاضرات في المفضلة وتحديد تخصصك الدراسي.
                 </p>
               </div>
             </div>
 
             <button
               type="button"
-              onClick={signInWithGoogle}
+              onClick={openLoginModal}
               disabled={authLoading}
               className="min-h-[46px] px-5 py-2.5 rounded-xl bg-[#00A6A6] hover:bg-[#008e8e] text-white text-sm font-semibold inline-flex items-center justify-center gap-2 transition-colors whitespace-nowrap shrink-0 disabled:opacity-60"
             >
               <LogIn className="w-4 h-4" />
-              {authLoading ? 'جاري تسجيل الدخول...' : 'تسجيل الدخول بحساب Google'}
+              المتابعة باستخدام Google
             </button>
           </div>
         ) : (
           <div className="space-y-6">
+            {accountStatus === 'suspended' && (
+              <div
+                role="alert"
+                className="rounded-xl bg-[#FF8066]/15 border border-[#FF8066]/40 px-4 py-3 text-sm text-[#0B2545] flex items-center gap-2 font-semibold"
+              >
+                <ShieldAlert className="w-5 h-5 text-[#FF8066] shrink-0" />
+                تم تعليق صلاحيات هذا الحساب من قبل إدارة المنصة.
+              </div>
+            )}
+
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div className="flex items-center gap-4 min-w-0">
-                {profile?.photoURL ? (
+                {profile?.photoURL || firebaseUser.photoURL ? (
                   <img
-                    src={profile.photoURL}
-                    alt={profile.displayName}
+                    src={profile?.photoURL || firebaseUser.photoURL || ''}
+                    alt={profile?.displayName || firebaseUser.displayName || ''}
                     referrerPolicy="no-referrer"
                     className="w-14 h-14 rounded-2xl object-cover border border-slate-200 shrink-0"
                   />
@@ -119,17 +157,22 @@ export function ProfileView({
                     {profile?.displayName || firebaseUser.displayName}
                   </h1>
                   <p className="text-xs text-slate-500 mt-0.5 flex items-center gap-2 flex-wrap">
-                    <span>{firebaseUser.email}</span>
+                    <span className="font-mono">{firebaseUser.email}</span>
                     <span aria-hidden="true">·</span>
-                    <span className="font-semibold text-[#00A6A6]">
-                      {isAdmin ? 'مشرف المنصة' : 'حساب طالب'}
+                    <span className="inline-flex items-center gap-1 font-semibold text-[#00A6A6]">
+                      {isSuperAdmin && <Crown className="w-3.5 h-3.5 text-[#FF8066]" />}
+                      {ROLE_LABELS_AR[role]}
+                    </span>
+                    <span aria-hidden="true">·</span>
+                    <span className={accountStatus === 'suspended' ? 'text-[#FF8066] font-bold' : 'text-emerald-600 font-semibold'}>
+                      {accountStatus === 'suspended' ? 'معلق' : 'نشط'}
                     </span>
                   </p>
                 </div>
               </div>
 
               <div className="flex items-center gap-2 shrink-0 flex-wrap">
-                {isAdmin && (
+                {isStaff && (
                   <button
                     type="button"
                     onClick={onOpenAdmin}
@@ -151,11 +194,52 @@ export function ProfileView({
               </div>
             </div>
 
-            {/* Academic Preference Form */}
+            {/* Verified Google Metadata Summary */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+              <div className="rounded-xl bg-slate-50 border border-slate-200/80 p-3">
+                <p className="text-slate-500 flex items-center gap-1.5">
+                  <Calendar className="w-3.5 h-3.5 text-[#00A6A6]" />
+                  تاريخ إنشاء الحساب
+                </p>
+                <p className="font-semibold text-[#0B2545] mt-1">
+                  {formatAccountDate(profile?.createdAt || firebaseUser.metadata.creationTime)}
+                </p>
+              </div>
+              <div className="rounded-xl bg-slate-50 border border-slate-200/80 p-3">
+                <p className="text-slate-500 flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5 text-[#00A6A6]" />
+                  آخر تسجيل دخول
+                </p>
+                <p className="font-semibold text-[#0B2545] mt-1">
+                  {formatAccountDate(profile?.lastLoginAt || firebaseUser.metadata.lastSignInTime)}
+                </p>
+              </div>
+              <div className="rounded-xl bg-slate-50 border border-slate-200/80 p-3">
+                <p className="text-slate-500">معرف حساب Google الموثق</p>
+                <p className="font-mono text-[11px] font-semibold text-[#0B2545] mt-1 truncate">
+                  {profile?.googleSub || firebaseUser.uid}
+                </p>
+              </div>
+            </div>
+
+            {/* Profile Info & Academic Preference Form */}
             <form
               onSubmit={handleSavePrefs}
-              className="bg-[#EAF4F7]/70 rounded-2xl p-4 sm:p-5 grid grid-cols-1 sm:grid-cols-3 gap-4 items-end"
+              className="bg-[#EAF4F7]/70 rounded-2xl p-4 sm:p-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-end"
             >
+              <div>
+                <label htmlFor="prof-name" className="block text-xs font-semibold text-[#0B2545] mb-1.5">
+                  الاسم المعروض
+                </label>
+                <input
+                  id="prof-name"
+                  type="text"
+                  value={displayNameInput}
+                  onChange={(e) => setDisplayNameInput(e.target.value)}
+                  className="w-full min-h-[44px] px-3 rounded-xl bg-white border border-slate-200 text-sm text-[#0B2545]"
+                />
+              </div>
+
               <div>
                 <label htmlFor="pref-spec" className="block text-xs font-semibold text-[#0B2545] mb-1.5">
                   التخصص المفضل
@@ -203,7 +287,7 @@ export function ProfileView({
                   type="submit"
                   className="min-h-[44px] px-5 py-2.5 rounded-xl bg-[#00A6A6] hover:bg-[#008e8e] text-white text-sm font-semibold transition-colors whitespace-nowrap"
                 >
-                  حفظ التفضيلات
+                  حفظ البيانات
                 </button>
                 {savedNotice && (
                   <span role="status" className="text-xs font-semibold text-[#00A6A6]">
@@ -249,7 +333,7 @@ export function ProfileView({
             {favoriteFiles.map((file) => {
               const sub = subjects.find((s) => s.id === file.subjectId);
               const previewable = canPreviewInApp(file.fileExt, file.mimeType);
-              const downloadable = canDownloadFile(file, isAdmin);
+              const downloadable = canDownloadFile(file, isStaff);
               return (
                 <div
                   key={file.id}

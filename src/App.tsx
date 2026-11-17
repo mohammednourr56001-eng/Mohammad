@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import {
   Bell,
   BookOpen,
+  CheckCircle2,
   Heart,
   Home,
   LogIn,
@@ -24,6 +25,7 @@ import { NotificationsView } from './components/NotificationsView.tsx';
 import { ProfileView } from './components/ProfileView.tsx';
 import { AdminDashboard } from './components/AdminDashboard.tsx';
 import { FilePreviewModal } from './components/FilePreviewModal.tsx';
+import { LoginModal } from './components/LoginModal.tsx';
 import { LectureFile, Specialization, Subject } from './types/academic.ts';
 
 type StudentScreen =
@@ -35,7 +37,14 @@ type StudentScreen =
   | 'favorites';
 
 function PlatformShell() {
-  const { firebaseUser, isAdmin, signInWithGoogle, readNotificationIds } = useAuth();
+  const {
+    firebaseUser,
+    isStaff,
+    openLoginModal,
+    claimedInviteBanner,
+    dismissClaimedBanner,
+    readNotificationIds,
+  } = useAuth();
   const {
     specializations,
     academicYears,
@@ -143,16 +152,16 @@ function PlatformShell() {
           onPreviewFile={(file) => setPreviewFile(file)}
         />
         <FilePreviewModal file={previewFile} onClose={() => setPreviewFile(null)} />
+        <LoginModal />
       </>
     );
   }
 
   return (
     <div className="min-h-screen bg-white text-[#0B2545] flex flex-col">
-      {/* Top Navigation Bar (Strict 3-zone contract + RTL) */}
+      {/* Top Navigation Bar */}
       <header className="sticky top-0 z-30 h-14 sm:h-16 bg-white/95 backdrop-blur-md border-b border-slate-200/80">
         <div className="max-w-7xl mx-auto h-full px-4 sm:px-6 flex items-center justify-between gap-8">
-          {/* Zone 1: Brand Wordmark + Mobile Menu Trigger */}
           <div className="flex items-center gap-3 shrink-0">
             <button
               type="button"
@@ -171,7 +180,6 @@ function PlatformShell() {
             </button>
           </div>
 
-          {/* Zone 2: 5 concise single-line text nav links */}
           <nav
             aria-label="التنقل الرئيسي"
             className="hidden lg:flex items-center gap-6 text-sm font-medium text-slate-600"
@@ -212,9 +220,8 @@ function PlatformShell() {
             })}
           </nav>
 
-          {/* Zone 3: 1 Primary Action */}
           <div className="flex items-center gap-2 shrink-0">
-            {isAdmin ? (
+            {isStaff ? (
               <button
                 type="button"
                 onClick={navigateToAdmin}
@@ -226,7 +233,7 @@ function PlatformShell() {
             ) : !firebaseUser ? (
               <button
                 type="button"
-                onClick={signInWithGoogle}
+                onClick={openLoginModal}
                 className="min-h-[40px] px-4 py-2 rounded-xl bg-[#00A6A6] hover:bg-[#008e8e] text-white text-xs sm:text-sm font-semibold inline-flex items-center gap-2 transition-colors whitespace-nowrap shrink-0"
               >
                 <LogIn className="w-4 h-4" />
@@ -297,7 +304,7 @@ function PlatformShell() {
                   </button>
                 ))}
 
-                {isAdmin && (
+                {isStaff && (
                   <button
                     type="button"
                     onClick={navigateToAdmin}
@@ -319,6 +326,25 @@ function PlatformShell() {
 
       {/* Main Content */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 pt-6 pb-20 lg:pb-12">
+        {claimedInviteBanner && (
+          <div
+            role="status"
+            className="mb-5 rounded-2xl bg-[#EAF4F7] border border-[#00A6A6]/40 px-4 py-3 text-sm text-[#0B2545] flex items-center justify-between gap-3"
+          >
+            <span className="flex items-center gap-2 font-semibold">
+              <CheckCircle2 className="w-4 h-4 text-[#00A6A6]" />
+              {claimedInviteBanner}
+            </span>
+            <button
+              type="button"
+              onClick={dismissClaimedBanner}
+              className="text-xs font-bold text-[#00A6A6] underline"
+            >
+              إغلاق
+            </button>
+          </div>
+        )}
+
         {error && (
           <div
             role="alert"
@@ -347,7 +373,7 @@ function PlatformShell() {
             onChangeSelection={setLecturesSelection}
             onBackHome={() => setScreen('home')}
             onPreviewFile={(file) => setPreviewFile(file)}
-            onRequireSignIn={signInWithGoogle}
+            onRequireSignIn={openLoginModal}
           />
         )}
 
@@ -398,7 +424,7 @@ function PlatformShell() {
             >
               الإعلانات الأكاديمية
             </button>
-            {isAdmin && (
+            {isStaff && (
               <button
                 type="button"
                 onClick={navigateToAdmin}
@@ -411,7 +437,7 @@ function PlatformShell() {
         </div>
       </footer>
 
-      {/* Mobile Bottom Tab Bar (matching sketch's 5-icon layout, <= 15% sticky height) */}
+      {/* Mobile Bottom Tab Bar */}
       <nav
         aria-label="شريط التنقل السفلي"
         className="lg:hidden fixed bottom-0 left-0 right-0 z-30 h-[58px] bg-white/95 backdrop-blur-md border-t border-slate-200 grid grid-cols-5 items-center px-1"
@@ -440,7 +466,6 @@ function PlatformShell() {
           <span>البحث</span>
         </button>
 
-        {/* Centered Home Anchor matching the sketch */}
         <button
           type="button"
           onClick={() => setScreen('home')}
@@ -483,8 +508,9 @@ function PlatformShell() {
         </button>
       </nav>
 
-      {/* PDF & Image Preview Modal */}
+      {/* Modals */}
       <FilePreviewModal file={previewFile} onClose={() => setPreviewFile(null)} />
+      <LoginModal />
     </div>
   );
 }

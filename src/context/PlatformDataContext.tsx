@@ -18,15 +18,23 @@ import {
 import {
   AcademicYear,
   ActivityLog,
+  AdminEntry,
+  AdminInvitation,
   Announcement,
+  BackupSnapshot,
+  DEFAULT_STORAGE_THRESHOLDS,
   LectureFile,
   NotificationItem,
+  PermissionProfile,
   PlatformSettings,
   Semester,
   Specialization,
+  StorageAlertThresholds,
   Subject,
+  SUPPORTED_FILE_EXTENSIONS,
   UserProfile,
 } from '../types/academic.ts';
+import { StorageAlertLevel } from '../utils/academicLogic.ts';
 import { useAuth } from './AuthContext.tsx';
 
 interface SeedCatalogPayload {
@@ -39,6 +47,22 @@ interface SeedCatalogPayload {
   notifications: NotificationItem[];
 }
 
+export interface ServerStorageStats {
+  lecturesBytes: number;
+  backupsBytes: number;
+  lecturesFileCount: number;
+  quotaMB: number;
+  quotaBytes: number;
+  remainingBytes: number;
+  usedPct: number;
+  alertLevel: StorageAlertLevel;
+  canUpload: boolean;
+  maxFileSizeMB: number;
+  allowZipUploads: boolean;
+  allowedExtensions: string[];
+  alertThresholds: StorageAlertThresholds;
+}
+
 interface PlatformDataContextValue {
   specializations: Specialization[];
   academicYears: AcademicYear[];
@@ -48,24 +72,39 @@ interface PlatformDataContextValue {
   announcements: Announcement[];
   notifications: NotificationItem[];
   users: UserProfile[];
+  admins: AdminEntry[];
+  adminInvitations: AdminInvitation[];
+  permissionProfiles: PermissionProfile[];
   activityLogs: ActivityLog[];
+  backups: BackupSnapshot[];
+  storageStats: ServerStorageStats | null;
   settings: PlatformSettings;
   loading: boolean;
   error: string | null;
   refreshAdminCatalog: () => Promise<void>;
+  refreshDirectory: () => Promise<void>;
+  refreshAuditLogs: () => Promise<void>;
+  refreshStorageStats: () => Promise<void>;
+  refreshBackups: () => Promise<void>;
 }
 
 const DEFAULT_SETTINGS: PlatformSettings = {
   maxFileSizeMB: 25,
   allowZipUploads: true,
   platformTitle: 'منصة UST للمحاضرات',
+  storageQuotaMB: 1024,
+  allowedExtensions: [...SUPPORTED_FILE_EXTENSIONS],
+  alertThresholds: DEFAULT_STORAGE_THRESHOLDS,
+  backupRetentionDays: 30,
+  autoBackupSchedule: 'weekly',
   updatedBy: 'system',
 };
 
 const PlatformDataContext = createContext<PlatformDataContextValue | null>(null);
 
 export function PlatformDataProvider({ children }: { children: React.ReactNode }) {
-  const { isAdmin, authReady, firebaseUser } = useAuth();
+  const { isStaff, isSuperAdmin, hasPerm, authReady, firebaseUser, adminEntry, getIdToken } =
+    useAuth();
 
   const [seedCatalog, setSeedCatalog] = useState<SeedCatalogPayload | null>(null);
   const [fsSpecs, setFsSpecs] = useState<Specialization[]>([]);
@@ -73,10 +112,17 @@ export function PlatformDataProvider({ children }: { children: React.ReactNode }
   const [fsSemesters, setFsSemesters] = useState<Semester[]>([]);
   const [fsSubjects, setFsSubjects] = useState<Subject[]>([]);
   const [fsFiles, setFsFiles] = useState<LectureFile[]>([]);
+  const [ownDraftFiles, setOwnDraftFiles] = useState<LectureFile[]>([]);
   const [fsAnnouncements, setFsAnnouncements] = useState<Announcement[]>([]);
   const [fsNotifications, setFsNotifications] = useState<NotificationItem[]>([]);
+
   const [users, setUsers] = useState<UserProfile[]>([]);
+  const [admins, setAdmins] = useState<AdminEntry[]>([]);
+  const [adminInvitations, setAdminInvitations] = useState<AdminInvitation[]>([]);
+  const [permissionProfiles, setPermissionProfiles] = useState<PermissionProfile[]>([]);
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
+  const [backups, setBackups] = useState<BackupSnapshot[]>([]);
+  const [storageStats, setStorageStats] = useState<ServerStorageStats | null>(null);
   const [settings, setSettings] = useState<PlatformSettings>(DEFAULT_SETTINGS);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -85,9 +131,9 @@ export function PlatformDataProvider({ children }: { children: React.ReactNode }
 
   const isBootstrappedEmail =
     Boolean(firebaseUser?.emailVerified) &&
-    firebaseUser?.email === 'mohammednourr56000@gmail.com';
+    firebaseUser?.email?.toLowerCase() === 'mohammednourr56000@gmail.com';
 
-  // Fetch initial deterministic catalog from server
+  // Fetch deterministic seed catalog
   useEffect(() => {
     let active = true;
     fetch('/api/catalog/seed')
@@ -103,57 +149,87 @@ export function PlatformDataProvider({ children }: { children: React.ReactNode }
     };
   }, []);
 
-  // Persist initial seed into Firestore automatically on first Admin session if Firestore is empty
+  // Auto-seed Firestore once on verified Super Admin session if empty
   const persistSeedToFirestoreIfEmpty = useCallback(
     async (catalog: SeedCatalogPayload) => {
-      if (!firebaseUser || !isAdmin || seedingFirestoreRef.current) return;
+      const canSeedAsOwner =
+        Boolean(firebaseUser?.emailVerified) &&
+        (isBootstrappedEmail ||
+          (adminEntry?.role === 'super_admin' && adminEntry?.status === 'active'));
+      if (!firebaseUser || !isSuperAdmin || !canSeedAsOwner || seedingFirestoreRef.current) {
+        return;
+      }
       seedingFirestoreRef.current = true;
       try {
-        const existingSpecs = await getDocs(collection(db, 'specializations'));
+        const specsQuery = isBootstrappedEmail
+          ? collection(db, 'specializations')
+          : query(collection(db, 'specializations'), where('status', '==', 'published'));
+        const existingSpecs = await getDocs(specsQuery);
         if (!existingSpecs.empty) return;
 
-        const batch = writeBatch(db);
         const now = serverTimestamp();
 
-        batch.set(doc(db, 'settings', 'platform'), {
+        // Stage 1: Platform settings & Specializations (root academic entities)
+        const stage1 = writeBatch(db);
+        stage1.set(doc(db, 'settings', 'platform'), {
           maxFileSizeMB: 25,
           allowZipUploads: true,
           platformTitle: 'منصة UST للمحاضرات',
+          storageQuotaMB: 1024,
+          allowedExtensions: [...SUPPORTED_FILE_EXTENSIONS],
+          alertThresholds: DEFAULT_STORAGE_THRESHOLDS,
+          backupRetentionDays: 30,
+          autoBackupSchedule: 'weekly',
           updatedBy: firebaseUser.uid,
           updatedAt: now,
         });
-
         for (const s of catalog.specializations) {
-          batch.set(doc(db, 'specializations', s.id), {
+          stage1.set(doc(db, 'specializations', s.id), {
             ...s,
             createdBy: firebaseUser.uid,
             createdAt: now,
             updatedAt: now,
           });
         }
+        await stage1.commit();
+
+        // Stage 2: Academic Years
+        const stage2 = writeBatch(db);
         for (const y of catalog.academicYears) {
-          batch.set(doc(db, 'academicYears', y.id), {
+          stage2.set(doc(db, 'academicYears', y.id), {
             ...y,
             createdAt: now,
             updatedAt: now,
           });
         }
+        await stage2.commit();
+
+        // Stage 3: Semesters
+        const stage3 = writeBatch(db);
         for (const sem of catalog.semesters) {
-          batch.set(doc(db, 'semesters', sem.id), {
+          stage3.set(doc(db, 'semesters', sem.id), {
             ...sem,
             createdAt: now,
             updatedAt: now,
           });
         }
+        await stage3.commit();
+
+        // Stage 4: Subjects
+        const stage4 = writeBatch(db);
         for (const sub of catalog.subjects) {
-          batch.set(doc(db, 'subjects', sub.id), {
+          stage4.set(doc(db, 'subjects', sub.id), {
             ...sub,
             createdAt: now,
             updatedAt: now,
           });
         }
+        await stage4.commit();
+
+        // Stage 5: Lecture Files, Announcements & Notifications
+        const stage5 = writeBatch(db);
         for (const lf of catalog.lectureFiles) {
-          batch.set(doc(db, 'lectureFiles', lf.id), {
+          stage5.set(doc(db, 'lectureFiles', lf.id), {
             ...lf,
             uploadedBy: firebaseUser.uid,
             createdAt: now,
@@ -161,7 +237,7 @@ export function PlatformDataProvider({ children }: { children: React.ReactNode }
           });
         }
         for (const ann of catalog.announcements) {
-          batch.set(doc(db, 'announcements', ann.id), {
+          stage5.set(doc(db, 'announcements', ann.id), {
             ...ann,
             createdBy: firebaseUser.uid,
             createdAt: now,
@@ -169,40 +245,115 @@ export function PlatformDataProvider({ children }: { children: React.ReactNode }
           });
         }
         for (const n of catalog.notifications) {
-          batch.set(doc(db, 'notifications', n.id), {
+          stage5.set(doc(db, 'notifications', n.id), {
             ...n,
             createdAt: now,
           });
         }
-
-        await batch.commit();
+        await stage5.commit();
       } catch (err) {
         console.error('Auto-seed Firestore warning:', err);
       } finally {
         seedingFirestoreRef.current = false;
       }
     },
-    [firebaseUser, isAdmin]
+    [firebaseUser, isSuperAdmin, isBootstrappedEmail, adminEntry]
   );
 
   useEffect(() => {
-    if (isAdmin && firebaseUser && seedCatalog && fsSpecs.length === 0 && !loading) {
+    if (isSuperAdmin && firebaseUser && seedCatalog && fsSpecs.length === 0 && !loading) {
       persistSeedToFirestoreIfEmpty(seedCatalog);
     }
-  }, [isAdmin, firebaseUser, seedCatalog, fsSpecs.length, loading, persistSeedToFirestoreIfEmpty]);
+  }, [isSuperAdmin, firebaseUser, seedCatalog, fsSpecs.length, loading, persistSeedToFirestoreIfEmpty]);
+
+  const refreshDirectory = useCallback(async () => {
+    if (!isStaff || (!isSuperAdmin && !hasPerm('users.view') && !hasPerm('roles.assign'))) return;
+    try {
+      const token = await getIdToken();
+      if (!token) return;
+      const res = await fetch('/api/admin/directory', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (Array.isArray(data.users)) setUsers(data.users);
+      if (Array.isArray(data.admins)) setAdmins(data.admins);
+      if (Array.isArray(data.invitations)) setAdminInvitations(data.invitations);
+    } catch {
+      // ignore directory errors
+    }
+  }, [isStaff, isSuperAdmin, hasPerm, getIdToken]);
+
+  const refreshAuditLogs = useCallback(async () => {
+    if (!isStaff || (!isSuperAdmin && !hasPerm('audit_logs.view'))) return;
+    try {
+      const token = await getIdToken();
+      if (!token) return;
+      const res = await fetch('/api/admin/audit-logs', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (Array.isArray(data.logs)) {
+        setActivityLogs(data.logs);
+      }
+    } catch {
+      // ignore audit fetch errors
+    }
+  }, [isStaff, isSuperAdmin, hasPerm, getIdToken]);
+
+  const refreshStorageStats = useCallback(async () => {
+    if (!isStaff || (!isSuperAdmin && !hasPerm('storage.view') && !hasPerm('lectures.upload'))) return;
+    try {
+      const token = await getIdToken();
+      if (!token) return;
+      const res = await fetch('/api/storage/stats', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) return;
+      const data = (await res.json()) as ServerStorageStats;
+      setStorageStats(data);
+    } catch {
+      // ignore storage stats error
+    }
+  }, [isStaff, isSuperAdmin, hasPerm, getIdToken]);
+
+  const refreshBackups = useCallback(async () => {
+    if (!isStaff || (!isSuperAdmin && !hasPerm('settings.manage'))) return;
+    try {
+      const token = await getIdToken();
+      if (!token) return;
+      const res = await fetch('/api/backups', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (Array.isArray(data.backups)) {
+        setBackups(data.backups);
+      }
+    } catch {
+      // ignore backup list error
+    }
+  }, [isStaff, isSuperAdmin, hasPerm, getIdToken]);
 
   const refreshAdminCatalog = useCallback(async () => {
-    if (!isAdmin) return;
+    if (!isStaff) return;
     try {
+      const usePublishedOnly = !isBootstrappedEmail;
+      const makeGetQuery = (colName: string) =>
+        usePublishedOnly
+          ? query(collection(db, colName), where('status', '==', 'published'))
+          : collection(db, colName);
+
       const [specsSnap, yrsSnap, semsSnap, subsSnap, filesSnap, annSnap, notifSnap] =
         await Promise.all([
-          getDocs(collection(db, 'specializations')),
-          getDocs(collection(db, 'academicYears')),
-          getDocs(collection(db, 'semesters')),
-          getDocs(collection(db, 'subjects')),
-          getDocs(collection(db, 'lectureFiles')),
-          getDocs(collection(db, 'announcements')),
-          getDocs(collection(db, 'notifications')),
+          getDocs(makeGetQuery('specializations')),
+          getDocs(makeGetQuery('academicYears')),
+          getDocs(makeGetQuery('semesters')),
+          getDocs(makeGetQuery('subjects')),
+          getDocs(makeGetQuery('lectureFiles')),
+          getDocs(makeGetQuery('announcements')),
+          getDocs(makeGetQuery('notifications')),
         ]);
       setFsSpecs(specsSnap.docs.map((d) => d.data() as Specialization));
       setFsYears(yrsSnap.docs.map((d) => d.data() as AcademicYear));
@@ -211,10 +362,24 @@ export function PlatformDataProvider({ children }: { children: React.ReactNode }
       setFsFiles(filesSnap.docs.map((d) => d.data() as LectureFile));
       setFsAnnouncements(annSnap.docs.map((d) => d.data() as Announcement));
       setFsNotifications(notifSnap.docs.map((d) => d.data() as NotificationItem));
+
+      await Promise.all([
+        refreshStorageStats(),
+        refreshDirectory(),
+        refreshAuditLogs(),
+        refreshBackups(),
+      ]);
     } catch (err) {
       console.error('Admin catalog refresh warning:', err);
     }
-  }, [isAdmin]);
+  }, [
+    isStaff,
+    isBootstrappedEmail,
+    refreshStorageStats,
+    refreshDirectory,
+    refreshAuditLogs,
+    refreshBackups,
+  ]);
 
   useEffect(() => {
     if (!authReady) return;
@@ -298,6 +463,20 @@ export function PlatformDataProvider({ children }: { children: React.ReactNode }
       )
     );
 
+    if (usePublishedFilter && isStaff && firebaseUser) {
+      unsubscribers.push(
+        onSnapshot(
+          query(collection(db, 'lectureFiles'), where('uploadedBy', '==', firebaseUser.uid)),
+          (snap) => {
+            setOwnDraftFiles(snap.docs.map((d) => d.data() as LectureFile));
+          },
+          () => {}
+        )
+      );
+    } else {
+      setOwnDraftFiles([]);
+    }
+
     unsubscribers.push(
       onSnapshot(
         makeQuery('announcements'),
@@ -323,20 +502,39 @@ export function PlatformDataProvider({ children }: { children: React.ReactNode }
         doc(db, 'settings', 'platform'),
         (snap) => {
           if (snap.exists()) {
-            setSettings(snap.data() as PlatformSettings);
+            setSettings({ ...DEFAULT_SETTINGS, ...(snap.data() as PlatformSettings) });
           }
         },
         () => {}
       )
     );
 
-    if (isAdmin) {
+    if (isBootstrappedEmail) {
       unsubscribers.push(
         onSnapshot(
           collection(db, 'users'),
-          (snap) => {
-            setUsers(snap.docs.map((d) => d.data() as UserProfile));
-          },
+          (snap) => setUsers(snap.docs.map((d) => d.data() as UserProfile)),
+          () => {}
+        )
+      );
+      unsubscribers.push(
+        onSnapshot(
+          collection(db, 'admins'),
+          (snap) => setAdmins(snap.docs.map((d) => d.data() as AdminEntry)),
+          () => {}
+        )
+      );
+      unsubscribers.push(
+        onSnapshot(
+          collection(db, 'adminInvitations'),
+          (snap) => setAdminInvitations(snap.docs.map((d) => d.data() as AdminInvitation)),
+          () => {}
+        )
+      );
+      unsubscribers.push(
+        onSnapshot(
+          collection(db, 'permissionProfiles'),
+          (snap) => setPermissionProfiles(snap.docs.map((d) => d.data() as PermissionProfile)),
           () => {}
         )
       );
@@ -350,14 +548,11 @@ export function PlatformDataProvider({ children }: { children: React.ReactNode }
               const tb = (b.createdAt as { seconds?: number })?.seconds || 0;
               return tb - ta;
             });
-            setActivityLogs(logs.slice(0, 30));
+            setActivityLogs(logs.slice(0, 100));
           },
           () => {}
         )
       );
-    } else {
-      setUsers([]);
-      setActivityLogs([]);
     }
 
     return () => {
@@ -365,7 +560,37 @@ export function PlatformDataProvider({ children }: { children: React.ReactNode }
         unsub();
       }
     };
-  }, [authReady, isAdmin, isBootstrappedEmail]);
+  }, [authReady, isStaff, isBootstrappedEmail, firebaseUser]);
+
+  // Trigger server-indexed directory/audit/storage/backup refresh whenever staff permissions resolve
+  useEffect(() => {
+    if (!authReady || !isStaff) {
+      if (!isStaff) {
+        setUsers([]);
+        setAdmins([]);
+        setAdminInvitations([]);
+        setPermissionProfiles([]);
+        setActivityLogs([]);
+        setBackups([]);
+        setStorageStats(null);
+      }
+      return;
+    }
+    refreshStorageStats();
+    refreshDirectory();
+    refreshAuditLogs();
+    refreshBackups();
+  }, [authReady, isStaff, refreshStorageStats, refreshDirectory, refreshAuditLogs, refreshBackups]);
+
+  // Merge fsFiles and ownDraftFiles cleanly by ID
+  const mergedFsFiles = React.useMemo(() => {
+    if (ownDraftFiles.length === 0) return fsFiles;
+    const map = new Map(fsFiles.map((f) => [f.id, f]));
+    for (const df of ownDraftFiles) {
+      map.set(df.id, df);
+    }
+    return Array.from(map.values());
+  }, [fsFiles, ownDraftFiles]);
 
   const useSeedFallback = fsSpecs.length === 0 && seedCatalog !== null;
 
@@ -376,7 +601,7 @@ export function PlatformDataProvider({ children }: { children: React.ReactNode }
         academicYears: useSeedFallback ? seedCatalog.academicYears : fsYears,
         semesters: useSeedFallback ? seedCatalog.semesters : fsSemesters,
         subjects: useSeedFallback ? seedCatalog.subjects : fsSubjects,
-        lectureFiles: useSeedFallback ? seedCatalog.lectureFiles : fsFiles,
+        lectureFiles: useSeedFallback ? seedCatalog.lectureFiles : mergedFsFiles,
         announcements:
           fsAnnouncements.length > 0
             ? fsAnnouncements
@@ -390,11 +615,20 @@ export function PlatformDataProvider({ children }: { children: React.ReactNode }
               ? seedCatalog.notifications
               : [],
         users,
+        admins,
+        adminInvitations,
+        permissionProfiles,
         activityLogs,
+        backups,
+        storageStats,
         settings,
         loading: loading && !seedCatalog,
         error,
         refreshAdminCatalog,
+        refreshDirectory,
+        refreshAuditLogs,
+        refreshStorageStats,
+        refreshBackups,
       }}
     >
       {children}

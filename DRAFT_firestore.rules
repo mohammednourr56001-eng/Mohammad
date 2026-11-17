@@ -34,13 +34,37 @@ service cloud.firestore {
     }
 
     function isBootstrappedAdmin() {
-      return isVerifiedUser() && request.auth.token.email == 'mohammednourr56000@gmail.com';
+      return isVerifiedUser() && request.auth.token.email.lower() == 'mohammednourr56000@gmail.com';
     }
 
-    function isAdmin() {
+    function hasStaffDoc() {
+      return isVerifiedUser() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    function staffDoc() {
+      return get(/databases/$(database)/documents/admins/$(request.auth.uid)).data;
+    }
+
+    function isSuperAdmin() {
       return isBootstrappedAdmin() || (
-        isVerifiedUser() &&
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+        hasStaffDoc() &&
+        staffDoc().role == 'super_admin' &&
+        staffDoc().status == 'active'
+      );
+    }
+
+    function isActiveStaff() {
+      return isBootstrappedAdmin() || (
+        hasStaffDoc() &&
+        staffDoc().status == 'active' &&
+        staffDoc().role in ['super_admin', 'admin', 'moderator']
+      );
+    }
+
+    function hasPerm(perm) {
+      return isSuperAdmin() || (
+        isActiveStaff() &&
+        perm in staffDoc().permissions
       );
     }
 
@@ -48,28 +72,123 @@ service cloud.firestore {
       return status in ['published', 'draft'];
     }
 
+    function isValidRole(role) {
+      return role in ['student', 'moderator', 'admin', 'super_admin'];
+    }
+
+    function isValidAccountStatus(status) {
+      return status in ['active', 'suspended'];
+    }
+
+    function isValidPermissionList(perms) {
+      return perms is list &&
+        perms.size() <= 25 &&
+        (perms.size() == 0 || perms[0] is string) &&
+        perms.hasOnly([
+          'users.view',
+          'users.manage',
+          'roles.assign',
+          'specializations.create',
+          'specializations.edit',
+          'specializations.delete',
+          'academic_years.manage',
+          'semesters.manage',
+          'subjects.create',
+          'subjects.edit',
+          'subjects.delete',
+          'lectures.upload',
+          'lectures.edit',
+          'lectures.publish',
+          'lectures.delete',
+          'storage.view',
+          'storage.manage',
+          'announcements.manage',
+          'settings.manage',
+          'audit_logs.view'
+        ]);
+    }
+
+    function isValidExtensionList(exts) {
+      return exts is list &&
+        exts.size() >= 1 &&
+        exts.size() <= 20 &&
+        exts[0] is string &&
+        exts.hasOnly(['pdf', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'jpg', 'jpeg', 'png', 'zip']);
+    }
+
     // --- Entity Validation Blueprints ---
     function isValidUserProfile(data) {
-      return data.keys().hasAll(['uid', 'email', 'displayName', 'role', 'createdAt', 'updatedAt']) &&
-        data.keys().hasOnly(['uid', 'email', 'displayName', 'photoURL', 'role', 'specializationId', 'academicYearId', 'createdAt', 'updatedAt']) &&
+      return data.keys().hasAll(['uid', 'email', 'displayName', 'role', 'status', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'uid', 'email', 'displayName', 'photoURL', 'googleSub',
+          'role', 'permissions', 'status',
+          'specializationId', 'academicYearId',
+          'createdAt', 'lastLoginAt', 'updatedAt'
+        ]) &&
         isValidId(data.uid) &&
         data.email is string && data.email.size() >= 3 && data.email.size() <= 254 &&
         data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120 &&
         (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 512)) &&
-        data.role in ['student', 'admin'] &&
+        (!('googleSub' in data) || (data.googleSub is string && data.googleSub.size() <= 128)) &&
+        isValidRole(data.role) &&
+        (!('permissions' in data) || isValidPermissionList(data.permissions)) &&
+        isValidAccountStatus(data.status) &&
         (!('specializationId' in data) || (data.specializationId is string && data.specializationId.size() <= 128)) &&
         (!('academicYearId' in data) || (data.academicYearId is string && data.academicYearId.size() <= 128)) &&
         data.createdAt is timestamp &&
+        (!('lastLoginAt' in data) || data.lastLoginAt is timestamp) &&
         data.updatedAt is timestamp;
     }
 
     function isValidAdminEntry(data) {
-      return data.keys().hasAll(['uid', 'email', 'addedAt']) &&
-        data.keys().hasOnly(['uid', 'email', 'addedAt', 'addedBy']) &&
+      return data.keys().hasAll(['uid', 'email', 'role', 'permissions', 'status', 'addedAt']) &&
+        data.keys().hasOnly([
+          'uid', 'email', 'displayName', 'role', 'permissions', 'status',
+          'assignedProfileName', 'inviteId', 'addedAt', 'addedBy'
+        ]) &&
         isValidId(data.uid) &&
         data.email is string && data.email.size() >= 3 && data.email.size() <= 254 &&
+        (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 120)) &&
+        data.role in ['super_admin', 'admin', 'moderator'] &&
+        isValidPermissionList(data.permissions) &&
+        isValidAccountStatus(data.status) &&
+        (!('assignedProfileName' in data) || (data.assignedProfileName is string && data.assignedProfileName.size() <= 120)) &&
+        (!('inviteId' in data) || isValidId(data.inviteId)) &&
         data.addedAt is timestamp &&
         (!('addedBy' in data) || (data.addedBy is string && data.addedBy.size() <= 128));
+    }
+
+    function isValidAdminInvitation(data) {
+      return data.keys().hasAll(['id', 'email', 'role', 'permissions', 'status', 'invitedBy', 'invitedByEmail', 'createdAt']) &&
+        data.keys().hasOnly([
+          'id', 'email', 'role', 'permissions', 'profileName',
+          'status', 'invitedBy', 'invitedByEmail',
+          'createdAt', 'acceptedAt', 'acceptedByUid'
+        ]) &&
+        isValidId(data.id) &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 254 &&
+        data.role in ['admin', 'moderator'] &&
+        isValidPermissionList(data.permissions) &&
+        (!('profileName' in data) || (data.profileName is string && data.profileName.size() <= 120)) &&
+        data.status in ['pending', 'accepted', 'revoked'] &&
+        isValidId(data.invitedBy) &&
+        data.invitedByEmail is string && data.invitedByEmail.size() >= 3 && data.invitedByEmail.size() <= 254 &&
+        data.createdAt is timestamp &&
+        (!('acceptedAt' in data) || data.acceptedAt is timestamp) &&
+        (!('acceptedByUid' in data) || isValidId(data.acceptedByUid));
+    }
+
+    function isValidPermissionProfile(data) {
+      return data.keys().hasAll(['id', 'name', 'baseRole', 'permissions', 'createdBy', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'name', 'description', 'baseRole', 'permissions', 'createdBy', 'createdAt', 'updatedAt']) &&
+        isValidId(data.id) &&
+        data.name is string && data.name.size() >= 2 && data.name.size() <= 120 &&
+        (!('description' in data) || (data.description is string && data.description.size() <= 400)) &&
+        data.baseRole in ['admin', 'moderator'] &&
+        isValidPermissionList(data.permissions) &&
+        isValidId(data.createdBy) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
     }
 
     function isValidSpecialization(data) {
@@ -133,7 +252,13 @@ service cloud.firestore {
 
     function isValidLectureFile(data) {
       return data.keys().hasAll(['id', 'specializationId', 'academicYearId', 'semesterId', 'subjectId', 'title', 'category', 'fileName', 'originalName', 'fileExt', 'mimeType', 'fileSize', 'storageName', 'allowDownload', 'status', 'sortOrder', 'uploadedBy', 'createdAt', 'updatedAt']) &&
-        data.keys().hasOnly(['id', 'specializationId', 'academicYearId', 'semesterId', 'subjectId', 'title', 'description', 'category', 'lectureNumber', 'version', 'fileName', 'originalName', 'fileExt', 'mimeType', 'fileSize', 'storageName', 'allowDownload', 'status', 'sortOrder', 'uploadedBy', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'id', 'specializationId', 'academicYearId', 'semesterId', 'subjectId',
+          'title', 'description', 'category', 'lectureNumber', 'version',
+          'fileName', 'originalName', 'fileExt', 'mimeType', 'fileSize',
+          'storageName', 'storagePath', 'sha256', 'allowDownload', 'status', 'sortOrder',
+          'uploadedBy', 'uploadedByEmail', 'uploadedByName', 'createdAt', 'updatedAt'
+        ]) &&
         isValidId(data.id) &&
         isValidId(data.specializationId) &&
         isValidId(data.academicYearId) &&
@@ -150,10 +275,14 @@ service cloud.firestore {
         data.mimeType is string && data.mimeType.size() >= 1 && data.mimeType.size() <= 120 &&
         data.fileSize is number && data.fileSize >= 0 && data.fileSize <= 1073741824 &&
         data.storageName is string && data.storageName.size() >= 1 && data.storageName.size() <= 260 &&
+        (!('storagePath' in data) || (data.storagePath is string && data.storagePath.size() <= 400)) &&
+        (!('sha256' in data) || (data.sha256 is string && data.sha256.size() <= 128)) &&
         data.allowDownload is bool &&
         isValidStatus(data.status) &&
         data.sortOrder is number && data.sortOrder >= 0 && data.sortOrder <= 100000 &&
         data.uploadedBy is string && data.uploadedBy.size() >= 1 && data.uploadedBy.size() <= 128 &&
+        (!('uploadedByEmail' in data) || (data.uploadedByEmail is string && data.uploadedByEmail.size() <= 254)) &&
+        (!('uploadedByName' in data) || (data.uploadedByName is string && data.uploadedByName.size() <= 120)) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
@@ -204,25 +333,64 @@ service cloud.firestore {
 
     function isValidActivityLog(data) {
       return data.keys().hasAll(['id', 'actorUid', 'actorEmail', 'action', 'entityType', 'entityId', 'entityName', 'createdAt']) &&
-        data.keys().hasOnly(['id', 'actorUid', 'actorEmail', 'action', 'entityType', 'entityId', 'entityName', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'actorUid', 'actorEmail', 'actorName', 'actorRole', 'action', 'entityType', 'entityId', 'entityName', 'result', 'details', 'createdAt']) &&
         isValidId(data.id) &&
         isValidId(data.actorUid) &&
         data.actorEmail is string && data.actorEmail.size() <= 254 &&
-        data.action is string && data.action.size() >= 1 && data.action.size() <= 80 &&
+        (!('actorName' in data) || (data.actorName is string && data.actorName.size() <= 120)) &&
+        (!('actorRole' in data) || isValidRole(data.actorRole)) &&
+        data.action is string && data.action.size() >= 1 && data.action.size() <= 120 &&
         data.entityType is string && data.entityType.size() >= 1 && data.entityType.size() <= 80 &&
         isValidId(data.entityId) &&
         data.entityName is string && data.entityName.size() >= 1 && data.entityName.size() <= 200 &&
+        (!('result' in data) || data.result in ['success', 'denied', 'failed']) &&
+        (!('details' in data) || (data.details is string && data.details.size() <= 400)) &&
         data.createdAt is timestamp;
+    }
+
+    function isValidAlertThresholds(t) {
+      return t is map &&
+        t.keys().hasAll(['infoPct', 'warningPct', 'criticalPct', 'blockPct']) &&
+        t.keys().hasOnly(['infoPct', 'warningPct', 'criticalPct', 'blockPct']) &&
+        t.infoPct is number && t.infoPct >= 10 && t.infoPct <= 99 &&
+        t.warningPct is number && t.warningPct >= 10 && t.warningPct <= 99 &&
+        t.criticalPct is number && t.criticalPct >= 10 && t.criticalPct <= 100 &&
+        t.blockPct is number && t.blockPct >= 50 && t.blockPct <= 100;
     }
 
     function isValidPlatformSettings(data) {
       return data.keys().hasAll(['maxFileSizeMB', 'allowZipUploads', 'platformTitle', 'updatedBy', 'updatedAt']) &&
-        data.keys().hasOnly(['maxFileSizeMB', 'allowZipUploads', 'platformTitle', 'updatedBy', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'maxFileSizeMB', 'allowZipUploads', 'platformTitle',
+          'storageQuotaMB', 'allowedExtensions', 'alertThresholds',
+          'backupRetentionDays', 'autoBackupSchedule',
+          'updatedBy', 'updatedAt'
+        ]) &&
         data.maxFileSizeMB is number && data.maxFileSizeMB >= 1 && data.maxFileSizeMB <= 500 &&
         data.allowZipUploads is bool &&
         data.platformTitle is string && data.platformTitle.size() >= 2 && data.platformTitle.size() <= 120 &&
+        (!('storageQuotaMB' in data) || (data.storageQuotaMB is number && data.storageQuotaMB >= 1 && data.storageQuotaMB <= 1048576)) &&
+        (!('allowedExtensions' in data) || isValidExtensionList(data.allowedExtensions)) &&
+        (!('alertThresholds' in data) || isValidAlertThresholds(data.alertThresholds)) &&
+        (!('backupRetentionDays' in data) || (data.backupRetentionDays is number && data.backupRetentionDays >= 1 && data.backupRetentionDays <= 365)) &&
+        (!('autoBackupSchedule' in data) || data.autoBackupSchedule in ['daily', 'weekly', 'manual']) &&
         data.updatedBy is string && data.updatedBy.size() >= 1 && data.updatedBy.size() <= 128 &&
         data.updatedAt is timestamp;
+    }
+
+    function isValidBackupRecord(data) {
+      return data.keys().hasAll(['id', 'type', 'status', 'totalRecords', 'totalFiles', 'totalBytes', 'createdBy', 'createdByEmail', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'type', 'status', 'totalRecords', 'totalFiles', 'totalBytes', 'createdBy', 'createdByEmail', 'notes', 'createdAt']) &&
+        isValidId(data.id) &&
+        data.type in ['database', 'files', 'full'] &&
+        data.status in ['completed', 'failed'] &&
+        data.totalRecords is number && data.totalRecords >= 0 &&
+        data.totalFiles is number && data.totalFiles >= 0 &&
+        data.totalBytes is number && data.totalBytes >= 0 &&
+        isValidId(data.createdBy) &&
+        data.createdByEmail is string && data.createdByEmail.size() <= 254 &&
+        (!('notes' in data) || (data.notes is string && data.notes.size() <= 400)) &&
+        data.createdAt is timestamp;
     }
 
     // --- Connection Check Document ---
@@ -231,17 +399,21 @@ service cloud.firestore {
       allow list, write: if false;
     }
 
-    // --- Users & Subcollections (PII Isolated) ---
+    // --- Users & Subcollections (PII Isolated & Anti-Escalation Enforced) ---
     match /users/{userId} {
-      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
-      allow list: if isAdmin();
+      allow get: if isValidId(userId) && (isOwner(userId) || isSuperAdmin() || hasPerm('users.view'));
+      allow list: if isBootstrappedAdmin() || (isVerifiedUser() && existing().uid == request.auth.uid);
 
       allow create: if isVerifiedUser() &&
         isValidId(userId) &&
         isOwner(userId) &&
         isValidUserProfile(incoming()) &&
         incoming().uid == request.auth.uid &&
-        (incoming().role == 'student' || isBootstrappedAdmin()) &&
+        incoming().status == 'active' &&
+        (
+          (incoming().role == 'student' && (!('permissions' in incoming()) || incoming().permissions.size() == 0)) ||
+          (isBootstrappedAdmin() && incoming().role == 'super_admin')
+        ) &&
         incoming().createdAt == request.time &&
         incoming().updatedAt == request.time;
 
@@ -252,15 +424,40 @@ service cloud.firestore {
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time &&
         (
+          // Owner updating standard profile info only
           (isOwner(userId) &&
             incoming().role == existing().role &&
+            incoming().status == existing().status &&
             incoming().email == existing().email &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'specializationId', 'academicYearId', 'updatedAt'])) ||
-          (isAdmin() &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['role', 'displayName', 'photoURL', 'specializationId', 'academicYearId', 'updatedAt']))
+            incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'googleSub', 'specializationId', 'academicYearId', 'lastLoginAt', 'updatedAt'])) ||
+          // Owner syncing verified role/permissions from an authorized admins/{userId} record created via invitation
+          (isOwner(userId) &&
+            existing().role != 'super_admin' &&
+            incoming().status == existing().status &&
+            incoming().email == existing().email &&
+            existsAfter(/databases/$(database)/documents/admins/$(userId)) &&
+            incoming().role == getAfter(/databases/$(database)/documents/admins/$(userId)).data.role &&
+            incoming().permissions == getAfter(/databases/$(database)/documents/admins/$(userId)).data.permissions &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['role', 'permissions', 'lastLoginAt', 'updatedAt'])) ||
+          // Super Admin managing non-super-admin accounts (cannot promote anyone to super_admin via user management)
+          (isSuperAdmin() &&
+            existing().role != 'super_admin' &&
+            incoming().role != 'super_admin' &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['role', 'permissions', 'status', 'displayName', 'photoURL', 'specializationId', 'academicYearId', 'updatedAt'])) ||
+          // Super Admin updating own profile preferences
+          (isSuperAdmin() &&
+            isOwner(userId) &&
+            incoming().role == 'super_admin' &&
+            incoming().status == 'active' &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'googleSub', 'specializationId', 'academicYearId', 'lastLoginAt', 'updatedAt'])) ||
+          // Delegated users.manage permission can only suspend/reactivate students (never admins/super_admin)
+          (hasPerm('users.manage') &&
+            existing().role == 'student' &&
+            incoming().role == 'student' &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']))
         );
 
-      allow delete: if isValidId(userId) && isAdmin();
+      allow delete: if isValidId(userId) && isSuperAdmin() && existing().role != 'super_admin' && userId != request.auth.uid;
 
       match /favorites/{fileId} {
         allow get: if isValidId(userId) && isValidId(fileId) && isOwner(userId);
@@ -291,50 +488,131 @@ service cloud.firestore {
       }
     }
 
-    // --- Trusted Admins Lookup ---
+    // --- Trusted Staff & Granular Permissions Lookup ---
     match /admins/{userId} {
-      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
-      allow list: if isAdmin();
-      allow create: if isAdmin() &&
+      allow get: if isValidId(userId) && (isOwner(userId) || isSuperAdmin() || hasPerm('users.view'));
+      allow list: if isBootstrappedAdmin() || (isVerifiedUser() && existing().uid == request.auth.uid);
+
+      allow create: if isVerifiedUser() &&
         isValidId(userId) &&
         isValidAdminEntry(incoming()) &&
         incoming().uid == userId &&
-        incoming().addedAt == request.time;
-      allow update: if false;
-      allow delete: if isAdmin() && isValidId(userId) && userId != request.auth.uid;
+        incoming().addedAt == request.time &&
+        (
+          // Super Admin appointing admin/moderator or bootstrapping self
+          (isSuperAdmin() && (incoming().role in ['admin', 'moderator'] || (isOwner(userId) && isBootstrappedAdmin() && incoming().role == 'super_admin'))) ||
+          // Invited user accepting a genuine pending invitation matching their verified Google email
+          (isOwner(userId) &&
+            ('inviteId' in incoming()) &&
+            isValidId(incoming().inviteId) &&
+            exists(/databases/$(database)/documents/adminInvitations/$(incoming().inviteId)) &&
+            get(/databases/$(database)/documents/adminInvitations/$(incoming().inviteId)).data.status == 'pending' &&
+            get(/databases/$(database)/documents/adminInvitations/$(incoming().inviteId)).data.email == request.auth.token.email &&
+            incoming().email == request.auth.token.email &&
+            incoming().role == get(/databases/$(database)/documents/adminInvitations/$(incoming().inviteId)).data.role &&
+            incoming().permissions == get(/databases/$(database)/documents/adminInvitations/$(incoming().inviteId)).data.permissions &&
+            incoming().status == 'active' &&
+            incoming().role in ['admin', 'moderator'])
+        );
+
+      allow update: if isSuperAdmin() &&
+        isValidId(userId) &&
+        isValidAdminEntry(incoming()) &&
+        incoming().uid == existing().uid &&
+        incoming().addedAt == existing().addedAt &&
+        existing().role != 'super_admin' &&
+        incoming().role in ['admin', 'moderator'];
+
+      allow delete: if isSuperAdmin() && isValidId(userId) && existing().role != 'super_admin' && userId != request.auth.uid;
     }
 
-    // --- Academic Hierarchy ---
+    // --- Pending Staff Invitations ---
+    match /adminInvitations/{inviteId} {
+      allow get: if isValidId(inviteId) && (isSuperAdmin() || (isVerifiedUser() && existing().email == request.auth.token.email));
+      allow list: if isBootstrappedAdmin() || (isVerifiedUser() && existing().email == request.auth.token.email);
+
+      allow create: if isSuperAdmin() &&
+        isValidId(inviteId) &&
+        isValidAdminInvitation(incoming()) &&
+        incoming().id == inviteId &&
+        incoming().invitedBy == request.auth.uid &&
+        incoming().status == 'pending' &&
+        incoming().createdAt == request.time;
+
+      allow update: if isVerifiedUser() &&
+        isValidId(inviteId) &&
+        isValidAdminInvitation(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().email == existing().email &&
+        incoming().createdAt == existing().createdAt &&
+        (
+          (isSuperAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['role', 'permissions', 'profileName', 'status'])) ||
+          (existing().status == 'pending' &&
+            existing().email == request.auth.token.email &&
+            incoming().status == 'accepted' &&
+            incoming().acceptedByUid == request.auth.uid &&
+            incoming().role == existing().role &&
+            incoming().permissions == existing().permissions &&
+            incoming().acceptedAt == request.time &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'acceptedAt', 'acceptedByUid']))
+        );
+
+      allow delete: if isSuperAdmin() && isValidId(inviteId);
+    }
+
+    // --- Custom Permission Profiles ---
+    match /permissionProfiles/{profileId} {
+      allow get: if isValidId(profileId) && isSuperAdmin();
+      allow list: if isBootstrappedAdmin();
+      allow create: if isSuperAdmin() &&
+        isValidId(profileId) &&
+        isValidPermissionProfile(incoming()) &&
+        incoming().id == profileId &&
+        incoming().createdBy == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isSuperAdmin() &&
+        isValidId(profileId) &&
+        isValidPermissionProfile(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().createdBy == existing().createdBy &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['name', 'description', 'baseRole', 'permissions', 'updatedAt']);
+      allow delete: if isSuperAdmin() && isValidId(profileId);
+    }
+
+    // --- Academic Hierarchy (Granular RBAC Enforced) ---
     match /specializations/{specializationId} {
-      allow get: if isValidId(specializationId) && (existing().status == 'published' || isAdmin());
+      allow get: if isValidId(specializationId) && (existing().status == 'published' || isActiveStaff());
       allow list: if existing().status == 'published' || isBootstrappedAdmin();
-      allow create: if isAdmin() &&
+      allow create: if hasPerm('specializations.create') &&
         isValidId(specializationId) &&
         isValidSpecialization(incoming()) &&
         incoming().id == specializationId &&
         incoming().createdAt == request.time &&
         incoming().updatedAt == request.time;
-      allow update: if isAdmin() &&
+      allow update: if hasPerm('specializations.edit') &&
         isValidId(specializationId) &&
         isValidSpecialization(incoming()) &&
         incoming().id == existing().id &&
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time &&
         incoming().diff(existing()).affectedKeys().hasOnly(['name', 'description', 'iconKey', 'status', 'sortOrder', 'updatedAt']);
-      allow delete: if isAdmin() && isValidId(specializationId);
+      allow delete: if hasPerm('specializations.delete') && isValidId(specializationId);
     }
 
     match /academicYears/{yearId} {
-      allow get: if isValidId(yearId) && (existing().status == 'published' || isAdmin());
+      allow get: if isValidId(yearId) && (existing().status == 'published' || isActiveStaff());
       allow list: if existing().status == 'published' || isBootstrappedAdmin();
-      allow create: if isAdmin() &&
+      allow create: if hasPerm('academic_years.manage') &&
         isValidId(yearId) &&
         isValidAcademicYear(incoming()) &&
         incoming().id == yearId &&
-        exists(/databases/$(database)/documents/specializations/$(incoming().specializationId)) &&
+        existsAfter(/databases/$(database)/documents/specializations/$(incoming().specializationId)) &&
         incoming().createdAt == request.time &&
         incoming().updatedAt == request.time;
-      allow update: if isAdmin() &&
+      allow update: if hasPerm('academic_years.manage') &&
         isValidId(yearId) &&
         isValidAcademicYear(incoming()) &&
         incoming().id == existing().id &&
@@ -342,20 +620,20 @@ service cloud.firestore {
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time &&
         incoming().diff(existing()).affectedKeys().hasOnly(['name', 'status', 'sortOrder', 'updatedAt']);
-      allow delete: if isAdmin() && isValidId(yearId);
+      allow delete: if hasPerm('academic_years.manage') && isValidId(yearId);
     }
 
     match /semesters/{semesterId} {
-      allow get: if isValidId(semesterId) && (existing().status == 'published' || isAdmin());
+      allow get: if isValidId(semesterId) && (existing().status == 'published' || isActiveStaff());
       allow list: if existing().status == 'published' || isBootstrappedAdmin();
-      allow create: if isAdmin() &&
+      allow create: if hasPerm('semesters.manage') &&
         isValidId(semesterId) &&
         isValidSemester(incoming()) &&
         incoming().id == semesterId &&
-        exists(/databases/$(database)/documents/academicYears/$(incoming().academicYearId)) &&
+        existsAfter(/databases/$(database)/documents/academicYears/$(incoming().academicYearId)) &&
         incoming().createdAt == request.time &&
         incoming().updatedAt == request.time;
-      allow update: if isAdmin() &&
+      allow update: if hasPerm('semesters.manage') &&
         isValidId(semesterId) &&
         isValidSemester(incoming()) &&
         incoming().id == existing().id &&
@@ -364,20 +642,20 @@ service cloud.firestore {
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time &&
         incoming().diff(existing()).affectedKeys().hasOnly(['name', 'status', 'sortOrder', 'updatedAt']);
-      allow delete: if isAdmin() && isValidId(semesterId);
+      allow delete: if hasPerm('semesters.manage') && isValidId(semesterId);
     }
 
     match /subjects/{subjectId} {
-      allow get: if isValidId(subjectId) && (existing().status == 'published' || isAdmin());
+      allow get: if isValidId(subjectId) && (existing().status == 'published' || isActiveStaff());
       allow list: if existing().status == 'published' || isBootstrappedAdmin();
-      allow create: if isAdmin() &&
+      allow create: if hasPerm('subjects.create') &&
         isValidId(subjectId) &&
         isValidSubject(incoming()) &&
         incoming().id == subjectId &&
-        exists(/databases/$(database)/documents/semesters/$(incoming().semesterId)) &&
+        existsAfter(/databases/$(database)/documents/semesters/$(incoming().semesterId)) &&
         incoming().createdAt == request.time &&
         incoming().updatedAt == request.time;
-      allow update: if isAdmin() &&
+      allow update: if hasPerm('subjects.edit') &&
         isValidId(subjectId) &&
         isValidSubject(incoming()) &&
         incoming().id == existing().id &&
@@ -387,48 +665,58 @@ service cloud.firestore {
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time &&
         incoming().diff(existing()).affectedKeys().hasOnly(['name', 'description', 'iconKey', 'status', 'sortOrder', 'updatedAt']);
-      allow delete: if isAdmin() && isValidId(subjectId);
+      allow delete: if hasPerm('subjects.delete') && isValidId(subjectId);
     }
 
     match /lectureFiles/{fileId} {
-      allow get: if isValidId(fileId) && (existing().status == 'published' || isAdmin());
-      allow list: if existing().status == 'published' || isBootstrappedAdmin();
-      allow create: if isAdmin() &&
+      allow get: if isValidId(fileId) && (existing().status == 'published' || isActiveStaff());
+      allow list: if existing().status == 'published' || isBootstrappedAdmin() || (isVerifiedUser() && existing().uploadedBy == request.auth.uid);
+
+      allow create: if hasPerm('lectures.upload') &&
         isValidId(fileId) &&
         isValidLectureFile(incoming()) &&
         incoming().id == fileId &&
         incoming().uploadedBy == request.auth.uid &&
-        exists(/databases/$(database)/documents/subjects/$(incoming().subjectId)) &&
+        (incoming().status == 'draft' || hasPerm('lectures.publish')) &&
+        existsAfter(/databases/$(database)/documents/subjects/$(incoming().subjectId)) &&
         incoming().createdAt == request.time &&
         incoming().updatedAt == request.time;
-      allow update: if isAdmin() &&
+
+      allow update: if isActiveStaff() &&
         isValidId(fileId) &&
         isValidLectureFile(incoming()) &&
         incoming().id == existing().id &&
         incoming().uploadedBy == existing().uploadedBy &&
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time &&
-        incoming().diff(existing()).affectedKeys().hasOnly([
-          'specializationId', 'academicYearId', 'semesterId', 'subjectId',
-          'title', 'description', 'category', 'lectureNumber', 'version',
-          'fileName', 'originalName', 'fileExt', 'mimeType', 'fileSize', 'storageName',
-          'allowDownload', 'status', 'sortOrder', 'updatedAt'
-        ]);
-      allow delete: if isAdmin() && isValidId(fileId);
+        (
+          (hasPerm('lectures.publish') &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])) ||
+          (hasPerm('lectures.edit') &&
+            (incoming().status == existing().status || hasPerm('lectures.publish')) &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'specializationId', 'academicYearId', 'semesterId', 'subjectId',
+              'title', 'description', 'category', 'lectureNumber', 'version',
+              'fileName', 'originalName', 'fileExt', 'mimeType', 'fileSize',
+              'storageName', 'storagePath', 'sha256', 'allowDownload', 'status', 'sortOrder', 'updatedAt'
+            ]))
+        );
+
+      allow delete: if hasPerm('lectures.delete') && isValidId(fileId);
     }
 
     // --- Announcements & Notifications ---
     match /announcements/{announcementId} {
-      allow get: if isValidId(announcementId) && (existing().status == 'published' || isAdmin());
+      allow get: if isValidId(announcementId) && (existing().status == 'published' || isActiveStaff());
       allow list: if existing().status == 'published' || isBootstrappedAdmin();
-      allow create: if isAdmin() &&
+      allow create: if hasPerm('announcements.manage') &&
         isValidId(announcementId) &&
         isValidAnnouncement(incoming()) &&
         incoming().id == announcementId &&
         incoming().createdBy == request.auth.uid &&
         incoming().createdAt == request.time &&
         incoming().updatedAt == request.time;
-      allow update: if isAdmin() &&
+      allow update: if hasPerm('announcements.manage') &&
         isValidId(announcementId) &&
         isValidAnnouncement(incoming()) &&
         incoming().id == existing().id &&
@@ -436,31 +724,31 @@ service cloud.firestore {
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time &&
         incoming().diff(existing()).affectedKeys().hasOnly(['title', 'body', 'category', 'priority', 'specializationId', 'status', 'updatedAt']);
-      allow delete: if isAdmin() && isValidId(announcementId);
+      allow delete: if hasPerm('announcements.manage') && isValidId(announcementId);
     }
 
     match /notifications/{notificationId} {
-      allow get: if isValidId(notificationId) && (existing().status == 'published' || isAdmin());
+      allow get: if isValidId(notificationId) && (existing().status == 'published' || isActiveStaff());
       allow list: if existing().status == 'published' || isBootstrappedAdmin();
-      allow create: if isAdmin() &&
+      allow create: if (hasPerm('announcements.manage') || hasPerm('lectures.publish')) &&
         isValidId(notificationId) &&
         isValidNotification(incoming()) &&
         incoming().id == notificationId &&
         incoming().createdAt == request.time;
-      allow update: if isAdmin() &&
+      allow update: if hasPerm('announcements.manage') &&
         isValidId(notificationId) &&
         isValidNotification(incoming()) &&
         incoming().id == existing().id &&
         incoming().createdAt == existing().createdAt &&
         incoming().diff(existing()).affectedKeys().hasOnly(['title', 'message', 'status']);
-      allow delete: if isAdmin() && isValidId(notificationId);
+      allow delete: if hasPerm('announcements.manage') && isValidId(notificationId);
     }
 
-    // --- Admin Activity Logs & Settings ---
+    // --- Immutable Admin Activity Audit Logs ---
     match /activityLogs/{logId} {
-      allow get: if isValidId(logId) && isAdmin();
-      allow list: if isAdmin();
-      allow create: if isAdmin() &&
+      allow get: if isValidId(logId) && (isSuperAdmin() || hasPerm('audit_logs.view'));
+      allow list: if isBootstrappedAdmin() || (isVerifiedUser() && existing().actorUid == request.auth.uid);
+      allow create: if isActiveStaff() &&
         isValidId(logId) &&
         isValidActivityLog(incoming()) &&
         incoming().id == logId &&
@@ -469,21 +757,40 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    // --- Settings & Storage Quota ---
     match /settings/{settingId} {
       allow get: if isValidId(settingId);
       allow list: if false;
-      allow create: if isAdmin() &&
+      allow create: if (isSuperAdmin() || hasPerm('settings.manage')) &&
         isValidId(settingId) &&
         isValidPlatformSettings(incoming()) &&
         incoming().updatedBy == request.auth.uid &&
         incoming().updatedAt == request.time;
-      allow update: if isAdmin() &&
-        isValidId(settingId) &&
+      allow update: if isValidId(settingId) &&
         isValidPlatformSettings(incoming()) &&
         incoming().updatedBy == request.auth.uid &&
         incoming().updatedAt == request.time &&
-        incoming().diff(existing()).affectedKeys().hasOnly(['maxFileSizeMB', 'allowZipUploads', 'platformTitle', 'updatedBy', 'updatedAt']);
+        (
+          (isSuperAdmin() || hasPerm('settings.manage')) ||
+          (hasPerm('storage.manage') &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'maxFileSizeMB', 'allowZipUploads', 'storageQuotaMB', 'allowedExtensions', 'alertThresholds', 'updatedBy', 'updatedAt'
+            ]))
+        );
       allow delete: if false;
+    }
+
+    // --- Backup Records ---
+    match /backups/{backupId} {
+      allow get: if isValidId(backupId) && isSuperAdmin();
+      allow list: if isBootstrappedAdmin();
+      allow create: if isSuperAdmin() &&
+        isValidId(backupId) &&
+        isValidBackupRecord(incoming()) &&
+        incoming().id == backupId &&
+        incoming().createdBy == request.auth.uid &&
+        incoming().createdAt == request.time;
+      allow update, delete: if false;
     }
   }
 }

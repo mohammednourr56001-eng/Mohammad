@@ -2,32 +2,77 @@
   "entities": {
     "UserProfile": {
       "title": "UserProfile",
-      "description": "Registered university student or administrator profile synced with Firebase Auth.",
+      "description": "Registered university student, moderator, administrator, or Super Admin profile synced with Google OAuth / Firebase Auth.",
       "type": "object",
       "properties": {
         "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "email": { "type": "string", "format": "email", "maxLength": 254 },
         "displayName": { "type": "string", "minLength": 1, "maxLength": 120 },
         "photoURL": { "type": "string", "maxLength": 512 },
-        "role": { "type": "string", "enum": ["student", "admin"] },
+        "googleSub": { "type": "string", "maxLength": 128 },
+        "role": { "type": "string", "enum": ["student", "moderator", "admin", "super_admin"] },
+        "permissions": { "type": "array", "maxLength": 25 },
+        "status": { "type": "string", "enum": ["active", "suspended"] },
         "specializationId": { "type": "string", "maxLength": 128 },
         "academicYearId": { "type": "string", "maxLength": 128 },
         "createdAt": { "type": "string", "format": "date-time" },
+        "lastLoginAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["uid", "email", "displayName", "role", "createdAt", "updatedAt"]
+      "required": ["uid", "email", "displayName", "role", "status", "createdAt", "updatedAt"]
     },
     "AdminEntry": {
       "title": "AdminEntry",
-      "description": "Trusted administrator lookup entry keyed by Firebase Auth UID.",
+      "description": "Trusted staff/admin permission entry keyed by Firebase Auth UID.",
       "type": "object",
       "properties": {
         "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "email": { "type": "string", "format": "email", "maxLength": 254 },
+        "displayName": { "type": "string", "maxLength": 120 },
+        "role": { "type": "string", "enum": ["super_admin", "admin", "moderator"] },
+        "permissions": { "type": "array", "maxLength": 25 },
+        "status": { "type": "string", "enum": ["active", "suspended"] },
+        "assignedProfileName": { "type": "string", "maxLength": 120 },
+        "inviteId": { "type": "string", "maxLength": 128 },
         "addedAt": { "type": "string", "format": "date-time" },
         "addedBy": { "type": "string", "maxLength": 128 }
       },
-      "required": ["uid", "email", "addedAt"]
+      "required": ["uid", "email", "role", "permissions", "status", "addedAt"]
+    },
+    "AdminInvitation": {
+      "title": "AdminInvitation",
+      "description": "Pending or accepted staff role invitation bound to a verified Google email.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "format": "email", "maxLength": 254 },
+        "role": { "type": "string", "enum": ["admin", "moderator"] },
+        "permissions": { "type": "array", "maxLength": 25 },
+        "profileName": { "type": "string", "maxLength": 120 },
+        "status": { "type": "string", "enum": ["pending", "accepted", "revoked"] },
+        "invitedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "invitedByEmail": { "type": "string", "maxLength": 254 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "acceptedAt": { "type": "string", "format": "date-time" },
+        "acceptedByUid": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["id", "email", "role", "permissions", "status", "invitedBy", "invitedByEmail", "createdAt"]
+    },
+    "PermissionProfile": {
+      "title": "PermissionProfile",
+      "description": "Saved reusable granular permission profile created by Super Admin.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "description": { "type": "string", "maxLength": 400 },
+        "baseRole": { "type": "string", "enum": ["admin", "moderator"] },
+        "permissions": { "type": "array", "maxLength": 25 },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "baseRole", "permissions", "createdBy", "createdAt", "updatedAt"]
     },
     "Specialization": {
       "title": "Specialization",
@@ -130,10 +175,14 @@
         "mimeType": { "type": "string", "minLength": 1, "maxLength": 120 },
         "fileSize": { "type": "number" },
         "storageName": { "type": "string", "minLength": 1, "maxLength": 260 },
+        "storagePath": { "type": "string", "maxLength": 400 },
+        "sha256": { "type": "string", "maxLength": 128 },
         "allowDownload": { "type": "boolean" },
         "status": { "type": "string", "enum": ["published", "draft"] },
         "sortOrder": { "type": "number" },
         "uploadedBy": { "type": "string", "maxLength": 128 },
+        "uploadedByEmail": { "type": "string", "maxLength": 254 },
+        "uploadedByName": { "type": "string", "maxLength": 120 },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -217,38 +266,65 @@
     },
     "ActivityLog": {
       "title": "ActivityLog",
-      "description": "Administrative audit trail entry.",
+      "description": "Immutable administrative audit trail entry.",
       "type": "object",
       "properties": {
         "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "actorUid": { "type": "string", "minLength": 1, "maxLength": 128 },
         "actorEmail": { "type": "string", "maxLength": 254 },
-        "action": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "actorName": { "type": "string", "maxLength": 120 },
+        "actorRole": { "type": "string", "enum": ["student", "moderator", "admin", "super_admin"] },
+        "action": { "type": "string", "minLength": 1, "maxLength": 120 },
         "entityType": { "type": "string", "minLength": 1, "maxLength": 80 },
         "entityId": { "type": "string", "minLength": 1, "maxLength": 128 },
         "entityName": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "result": { "type": "string", "enum": ["success", "denied", "failed"] },
+        "details": { "type": "string", "maxLength": 400 },
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "actorUid", "actorEmail", "action", "entityType", "entityId", "entityName", "createdAt"]
     },
     "PlatformSettings": {
       "title": "PlatformSettings",
-      "description": "Configurable upload limits and platform settings managed by admins.",
+      "description": "Configurable upload limits, storage quota, alert thresholds, and backup retention managed by Super Admin.",
       "type": "object",
       "properties": {
         "maxFileSizeMB": { "type": "number" },
         "allowZipUploads": { "type": "boolean" },
         "platformTitle": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "storageQuotaMB": { "type": "number" },
+        "allowedExtensions": { "type": "array", "maxLength": 20 },
+        "alertThresholds": { "type": "object" },
+        "backupRetentionDays": { "type": "number" },
+        "autoBackupSchedule": { "type": "string", "enum": ["daily", "weekly", "manual"] },
         "updatedBy": { "type": "string", "maxLength": 128 },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["maxFileSizeMB", "allowZipUploads", "platformTitle", "updatedBy", "updatedAt"]
+    },
+    "BackupRecord": {
+      "title": "BackupRecord",
+      "description": "Database and storage backup metadata tracked by Super Admin.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "type": { "type": "string", "enum": ["database", "files", "full"] },
+        "status": { "type": "string", "enum": ["completed", "failed"] },
+        "totalRecords": { "type": "number" },
+        "totalFiles": { "type": "number" },
+        "totalBytes": { "type": "number" },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdByEmail": { "type": "string", "maxLength": 254 },
+        "notes": { "type": "string", "maxLength": 400 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "type", "status", "totalRecords", "totalFiles", "totalBytes", "createdBy", "createdByEmail", "createdAt"]
     }
   },
   "firestore": {
     "/users/{userId}": {
       "schema": { "$ref": "#/entities/UserProfile" },
-      "description": "User profile documents isolated to owner or admin."
+      "description": "User profile documents isolated to owner or Super Admin."
     },
     "/users/{userId}/favorites/{fileId}": {
       "schema": { "$ref": "#/entities/UserFavorite" },
@@ -260,7 +336,15 @@
     },
     "/admins/{userId}": {
       "schema": { "$ref": "#/entities/AdminEntry" },
-      "description": "Trusted administrator UIDs for role verification."
+      "description": "Trusted staff UID lookup with role and granular permissions."
+    },
+    "/adminInvitations/{inviteId}": {
+      "schema": { "$ref": "#/entities/AdminInvitation" },
+      "description": "Pending staff role invitations verified against Google email."
+    },
+    "/permissionProfiles/{profileId}": {
+      "schema": { "$ref": "#/entities/PermissionProfile" },
+      "description": "Custom reusable permission templates saved by Super Admin."
     },
     "/specializations/{specializationId}": {
       "schema": { "$ref": "#/entities/Specialization" },
@@ -292,11 +376,15 @@
     },
     "/activityLogs/{logId}": {
       "schema": { "$ref": "#/entities/ActivityLog" },
-      "description": "Admin activity logs."
+      "description": "Immutable administrative activity audit logs."
     },
     "/settings/{settingId}": {
       "schema": { "$ref": "#/entities/PlatformSettings" },
-      "description": "Platform configuration settings."
+      "description": "Platform configuration, storage quota, and backup settings."
+    },
+    "/backups/{backupId}": {
+      "schema": { "$ref": "#/entities/BackupRecord" },
+      "description": "Backup manifest records managed by Super Admin."
     }
   }
 }

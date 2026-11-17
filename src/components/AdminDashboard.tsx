@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import {
+  Archive,
   ArrowDown,
   ArrowRight,
   ArrowUp,
@@ -7,12 +8,15 @@ import {
   BookOpen,
   Calendar,
   CheckCircle2,
+  ClipboardList,
+  Crown,
   Edit3,
   Eye,
   EyeOff,
   FileText,
   FolderPlus,
   GraduationCap,
+  HardDrive,
   Home,
   Layers,
   LogOut,
@@ -45,6 +49,7 @@ import {
   ANNOUNCEMENT_CATEGORY_LABELS,
   LectureFile,
   PublishStatus,
+  ROLE_LABELS_AR,
   Semester,
   Specialization,
   Subject,
@@ -62,6 +67,11 @@ import {
 } from '../utils/academicLogic.ts';
 import { AcademicIcon, IconPicker } from './IconPicker.tsx';
 import { AdminFileUploader } from './AdminFileUploader.tsx';
+import { AdminManagementPanel } from './AdminManagementPanel.tsx';
+import { StorageCapacityPanel } from './StorageCapacityPanel.tsx';
+import { AuditLogsPanel } from './AuditLogsPanel.tsx';
+import { BackupRecoveryPanel } from './BackupRecoveryPanel.tsx';
+import { ModeratorDashboard } from './ModeratorDashboard.tsx';
 
 type AdminTab =
   | 'overview'
@@ -73,6 +83,9 @@ type AdminTab =
   | 'upload'
   | 'announcements'
   | 'users'
+  | 'storage'
+  | 'audit_logs'
+  | 'backups'
   | 'settings';
 
 export function AdminDashboard({
@@ -82,8 +95,19 @@ export function AdminDashboard({
   onExitAdmin: () => void;
   onPreviewFile: (file: LectureFile) => void;
 }) {
-  const { firebaseUser, isAdmin, authReady, logout, getIdToken, signInWithGoogle } =
-    useAuth();
+  const {
+    firebaseUser,
+    profile,
+    role,
+    accountStatus,
+    isSuperAdmin,
+    isStaff,
+    hasPerm,
+    authReady,
+    logout,
+    getIdToken,
+    openLoginModal,
+  } = useAuth();
   const {
     specializations,
     academicYears,
@@ -93,8 +117,11 @@ export function AdminDashboard({
     announcements,
     users,
     activityLogs,
+    storageStats,
     settings,
     refreshAdminCatalog,
+    refreshAuditLogs,
+    refreshStorageStats,
   } = usePlatformData();
 
   const [activeTab, setActiveTab] = useState<AdminTab>('overview');
@@ -175,18 +202,43 @@ export function AdminDashboard({
         id: logId,
         actorUid: firebaseUser.uid,
         actorEmail: firebaseUser.email || '',
+        actorName: profile?.displayName || firebaseUser.displayName || '',
+        actorRole: role,
         action,
         entityType,
         entityId,
         entityName,
+        result: 'success',
         createdAt: serverTimestamp(),
       });
     } catch {
       // non-fatal log error
     }
+    try {
+      const token = await getIdToken();
+      if (token) {
+        await fetch('/api/admin/audit-logs', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            action,
+            entityType,
+            entityId,
+            entityName,
+            result: 'success',
+          }),
+        });
+        refreshAuditLogs();
+      }
+    } catch {
+      // non-fatal
+    }
   };
 
-  // --- RBAC GATE (TEST 10) ---
+  // --- RBAC & SUSPENDED GATES ---
   if (!authReady) {
     return (
       <div className="min-h-screen bg-[#EAF4F7] flex items-center justify-center">
@@ -197,7 +249,37 @@ export function AdminDashboard({
     );
   }
 
-  if (!firebaseUser || !isAdmin) {
+  if (firebaseUser && accountStatus === 'suspended') {
+    return (
+      <div className="min-h-screen bg-[#EAF4F7] flex items-center justify-center p-6">
+        <div className="max-w-md w-full bg-white rounded-3xl border border-slate-200 p-8 text-center space-y-5 shadow-sm">
+          <div className="w-16 h-16 mx-auto rounded-2xl bg-[#FF8066]/15 text-[#FF8066] flex items-center justify-center">
+            <ShieldAlert className="w-8 h-8" />
+          </div>
+          <div className="space-y-2">
+            <h1 className="font-display text-2xl font-bold text-[#0B2545]">
+              تم تعليق هذا الحساب
+            </h1>
+            <p className="text-sm text-slate-600 leading-relaxed">
+              تم تعليق صلاحياتك الإدارية مؤقتاً من قبل مالك المنصة. يرجى مراجعة المدير الرئيسي للتحقق من حالة الحساب.
+            </p>
+          </div>
+          <div className="flex flex-col sm:flex-row gap-3 justify-center pt-2">
+            <button
+              type="button"
+              onClick={onExitAdmin}
+              className="min-h-[44px] px-5 py-2.5 rounded-xl bg-[#0B2545] text-white text-sm font-semibold inline-flex items-center justify-center gap-2"
+            >
+              <ArrowRight className="w-4 h-4" />
+              العودة إلى بوابة الطلاب
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!firebaseUser || !isStaff) {
     return (
       <div className="min-h-screen bg-[#EAF4F7] flex items-center justify-center p-6">
         <div className="max-w-md w-full bg-white rounded-3xl border border-slate-200 p-8 text-center space-y-5 shadow-sm">
@@ -224,7 +306,7 @@ export function AdminDashboard({
             {!firebaseUser && (
               <button
                 type="button"
-                onClick={signInWithGoogle}
+                onClick={openLoginModal}
                 className="min-h-[44px] px-5 py-2.5 rounded-xl bg-[#00A6A6] hover:bg-[#008e8e] text-white text-sm font-semibold"
               >
                 تسجيل دخول المشرف
@@ -234,6 +316,11 @@ export function AdminDashboard({
         </div>
       </div>
     );
+  }
+
+  // Dedicated Simplified Dashboard for Level 3 Moderators
+  if (role === 'moderator') {
+    return <ModeratorDashboard onExitAdmin={onExitAdmin} onPreviewFile={onPreviewFile} />;
   }
 
   const sortedSpecs = sortByOrder(specializations);
@@ -503,14 +590,21 @@ export function AdminDashboard({
     try {
       const token = await getIdToken();
       if (token && file.storageName) {
-        await fetch(`/api/files/storage/${encodeURIComponent(file.storageName)}`, {
-          method: 'DELETE',
-          headers: { Authorization: `Bearer ${token}` },
+        const qs = new URLSearchParams({
+          fileId: file.id,
+          ...(file.storagePath ? { storagePath: file.storagePath } : {}),
         });
+        await fetch(
+          `/api/files/storage/${encodeURIComponent(file.storageName)}?${qs.toString()}`,
+          {
+            method: 'DELETE',
+            headers: { Authorization: `Bearer ${token}` },
+          }
+        );
       }
       await deleteDoc(doc(db, 'lectureFiles', file.id));
       await logAdminAction('حذف ملف محاضرة', 'lectureFile', file.id, file.title);
-      await refreshAdminCatalog();
+      await Promise.all([refreshAdminCatalog(), refreshStorageStats()]);
       showToast('تم حذف الملف نهائياً.');
     } catch (err) {
       handleFirestoreError(err, OperationType.DELETE, `lectureFiles/${file.id}`);
@@ -555,35 +649,21 @@ export function AdminDashboard({
     }
   };
 
-  const handleToggleUserRole = async (targetUid: string, nextRole: 'admin' | 'student') => {
-    try {
-      const token = await getIdToken();
-      const res = await fetch(`/api/admin/users/${encodeURIComponent(targetUid)}/role`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ role: nextRole }),
-      });
-      if (!res.ok) throw new Error('فشل تحديث الصلاحية.');
-      await refreshAdminCatalog();
-      showToast('تم تحديث صلاحية المستخدم بنجاح.');
-    } catch {
-      showToast('تعذر تحديث صلاحية المستخدم.');
-    }
-  };
-
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      await setDoc(doc(db, 'settings', 'platform'), {
-        maxFileSizeMB: Math.min(500, Math.max(1, Number(maxFileSizeMB) || 25)),
-        allowZipUploads,
-        platformTitle: platformTitle.trim() || 'منصة UST للمحاضرات',
-        updatedBy: firebaseUser.uid,
-        updatedAt: serverTimestamp(),
-      });
+      await setDoc(
+        doc(db, 'settings', 'platform'),
+        {
+          ...settings,
+          maxFileSizeMB: Math.min(500, Math.max(1, Number(maxFileSizeMB) || 25)),
+          allowZipUploads,
+          platformTitle: platformTitle.trim() || 'منصة UST للمحاضرات',
+          updatedBy: firebaseUser.uid,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
       await logAdminAction('تحديث إعدادات المنصة', 'settings', 'platform', platformTitle.trim());
       showToast('تم حفظ إعدادات المنصة.');
     } catch (err) {
@@ -591,18 +671,115 @@ export function AdminDashboard({
     }
   };
 
-  const sidebarItems: Array<{ id: AdminTab; label: string; icon: React.ReactNode }> = [
-    { id: 'overview', label: 'الرئيسية', icon: <Home className="w-4 h-4" /> },
-    { id: 'specializations', label: 'إدارة التخصصات', icon: <GraduationCap className="w-4 h-4" /> },
-    { id: 'years', label: 'إدارة السنوات الدراسية', icon: <Layers className="w-4 h-4" /> },
-    { id: 'semesters', label: 'إدارة الفصول', icon: <Calendar className="w-4 h-4" /> },
-    { id: 'subjects', label: 'إدارة المواد', icon: <BookOpen className="w-4 h-4" /> },
-    { id: 'files', label: 'ملفات المحاضرات', icon: <FileText className="w-4 h-4" /> },
-    { id: 'upload', label: 'رفع الملفات', icon: <Upload className="w-4 h-4" /> },
-    { id: 'announcements', label: 'الإعلانات', icon: <Megaphone className="w-4 h-4" /> },
-    { id: 'users', label: 'المستخدمون', icon: <Users className="w-4 h-4" /> },
-    { id: 'settings', label: 'الإعدادات', icon: <Settings className="w-4 h-4" /> },
+  const allSidebarItems: Array<{
+    id: AdminTab;
+    label: string;
+    icon: React.ReactNode;
+    visible: boolean;
+  }> = [
+    { id: 'overview', label: 'الرئيسية', icon: <Home className="w-4 h-4" />, visible: true },
+    {
+      id: 'specializations',
+      label: 'إدارة التخصصات',
+      icon: <GraduationCap className="w-4 h-4" />,
+      visible:
+        isSuperAdmin ||
+        hasPerm('specializations.create') ||
+        hasPerm('specializations.edit') ||
+        hasPerm('specializations.delete'),
+    },
+    {
+      id: 'years',
+      label: 'إدارة السنوات الدراسية',
+      icon: <Layers className="w-4 h-4" />,
+      visible: isSuperAdmin || hasPerm('academic_years.manage'),
+    },
+    {
+      id: 'semesters',
+      label: 'إدارة الفصول',
+      icon: <Calendar className="w-4 h-4" />,
+      visible: isSuperAdmin || hasPerm('semesters.manage'),
+    },
+    {
+      id: 'subjects',
+      label: 'إدارة المواد',
+      icon: <BookOpen className="w-4 h-4" />,
+      visible:
+        isSuperAdmin ||
+        hasPerm('subjects.create') ||
+        hasPerm('subjects.edit') ||
+        hasPerm('subjects.delete'),
+    },
+    {
+      id: 'files',
+      label: 'ملفات المحاضرات',
+      icon: <FileText className="w-4 h-4" />,
+      visible:
+        isSuperAdmin ||
+        hasPerm('lectures.upload') ||
+        hasPerm('lectures.edit') ||
+        hasPerm('lectures.publish') ||
+        hasPerm('lectures.delete'),
+    },
+    {
+      id: 'upload',
+      label: 'رفع الملفات',
+      icon: <Upload className="w-4 h-4" />,
+      visible: isSuperAdmin || hasPerm('lectures.upload') || hasPerm('lectures.edit'),
+    },
+    {
+      id: 'announcements',
+      label: 'الإعلانات',
+      icon: <Megaphone className="w-4 h-4" />,
+      visible: isSuperAdmin || hasPerm('announcements.manage'),
+    },
+    {
+      id: 'users',
+      label: 'إدارة المسؤولين والمستخدمين',
+      icon: <Users className="w-4 h-4" />,
+      visible:
+        isSuperAdmin ||
+        hasPerm('users.view') ||
+        hasPerm('users.manage') ||
+        hasPerm('roles.assign'),
+    },
+    {
+      id: 'storage',
+      label: 'إدارة مساحة التخزين',
+      icon: <HardDrive className="w-4 h-4" />,
+      visible: isSuperAdmin || hasPerm('storage.view') || hasPerm('storage.manage'),
+    },
+    {
+      id: 'audit_logs',
+      label: 'سجل النشاط الإداري',
+      icon: <ClipboardList className="w-4 h-4" />,
+      visible: isSuperAdmin || hasPerm('audit_logs.view'),
+    },
+    {
+      id: 'backups',
+      label: 'النسخ الاحتياطي',
+      icon: <Archive className="w-4 h-4" />,
+      visible: isSuperAdmin || hasPerm('settings.manage'),
+    },
+    {
+      id: 'settings',
+      label: 'الإعدادات',
+      icon: <Settings className="w-4 h-4" />,
+      visible: isSuperAdmin || hasPerm('settings.manage'),
+    },
   ];
+
+  const sidebarItems = allSidebarItems.filter((item) => item.visible);
+
+  const studentsCount = users.filter((u) => u.role === 'student').length;
+  const adminsCount = users.filter((u) => u.role === 'admin' || u.role === 'super_admin').length;
+  const moderatorsCount = users.filter((u) => u.role === 'moderator').length;
+  const totalStorageUsed =
+    storageStats?.lecturesBytes ??
+    lectureFiles.reduce((sum, f) => sum + (Number(f.fileSize) || 0), 0);
+  const totalStorageRemaining =
+    storageStats?.remainingBytes ??
+    Math.max(0, (settings.storageQuotaMB || 1024) * 1024 * 1024 - totalStorageUsed);
 
   const maxSpecFiles = Math.max(
     1,
@@ -631,8 +808,12 @@ export function AdminDashboard({
         <div className="p-5 space-y-6 overflow-y-auto">
           <div className="flex items-center justify-between gap-2">
             <div>
-              <p className="font-display text-lg font-bold text-white">
+              <p className="font-display text-lg font-bold text-white flex items-center gap-1.5">
+                {isSuperAdmin && <Crown className="w-4 h-4 text-[#FF8066]" />}
                 إدارة منصة UST
+              </p>
+              <p className="text-[11px] text-[#00A6A6] font-semibold">
+                {ROLE_LABELS_AR[role]}
               </p>
               <p className="text-xs text-[#EAF4F7]/70 truncate max-w-[180px]">
                 {firebaseUser.email}
@@ -711,17 +892,19 @@ export function AdminDashboard({
             </h1>
           </div>
 
-          <button
-            type="button"
-            onClick={() => {
-              setEditingFile(null);
-              setActiveTab('upload');
-            }}
-            className="min-h-[40px] px-4 py-2 rounded-xl bg-[#00A6A6] hover:bg-[#008e8e] text-white text-xs sm:text-sm font-semibold inline-flex items-center gap-2 transition-colors whitespace-nowrap shrink-0"
-          >
-            <Plus className="w-4 h-4" />
-            رفع ملف جديد
-          </button>
+          {(isSuperAdmin || hasPerm('lectures.upload')) && (
+            <button
+              type="button"
+              onClick={() => {
+                setEditingFile(null);
+                setActiveTab('upload');
+              }}
+              className="min-h-[40px] px-4 py-2 rounded-xl bg-[#00A6A6] hover:bg-[#008e8e] text-white text-xs sm:text-sm font-semibold inline-flex items-center gap-2 transition-colors whitespace-nowrap shrink-0"
+            >
+              <Plus className="w-4 h-4" />
+              رفع ملف جديد
+            </button>
+          )}
         </header>
 
         <main className="p-4 sm:p-6 lg:p-8 max-w-6xl w-full mx-auto space-y-6">
@@ -738,21 +921,23 @@ export function AdminDashboard({
           {/* TAB 1: OVERVIEW */}
           {activeTab === 'overview' && (
             <div className="space-y-6">
-              <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 {[
-                  { label: 'التخصصات', value: specializations.length },
-                  { label: 'السنوات الدراسية', value: academicYears.length },
-                  { label: 'الفصول الدراسية', value: semesters.length },
-                  { label: 'المواد الدراسية', value: subjects.length },
-                  { label: 'الملفات المرفوعة', value: lectureFiles.length },
-                  { label: 'الطلاب المسجلون', value: users.length },
+                  { label: 'إجمالي المستخدمين', value: users.length },
+                  { label: 'عدد الطلاب', value: studentsCount },
+                  { label: 'المسؤولون والمشرفون', value: `${adminsCount} / ${moderatorsCount}` },
+                  { label: 'التخصصات والمواد', value: `${specializations.length} / ${subjects.length}` },
+                  { label: 'إجمالي الملفات', value: lectureFiles.length },
+                  { label: 'المساحة المستخدمة', value: formatFileSizeArabic(totalStorageUsed) },
+                  { label: 'المساحة المتبقية', value: formatFileSizeArabic(totalStorageRemaining) },
+                  { label: 'حالة النظام', value: 'مستقر وآمن' },
                 ].map((stat) => (
                   <div
                     key={stat.label}
                     className="bg-white rounded-2xl border border-slate-200 p-4 space-y-1"
                   >
                     <p className="text-xs text-slate-500">{stat.label}</p>
-                    <p className="font-display text-2xl font-bold text-[#0B2545] tabular-nums">
+                    <p className="font-display text-xl sm:text-2xl font-bold text-[#0B2545] tabular-nums">
                       {stat.value}
                     </p>
                   </div>
@@ -822,6 +1007,9 @@ export function AdminDashboard({
           {/* TAB 2: SPECIALIZATIONS */}
           {activeTab === 'specializations' && (
             <div className="space-y-6">
+              {(isSuperAdmin ||
+                hasPerm('specializations.create') ||
+                (editingSpec && hasPerm('specializations.edit'))) && (
               <form
                 onSubmit={handleSaveSpecialization}
                 className="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 space-y-4"
@@ -897,6 +1085,7 @@ export function AdminDashboard({
                   )}
                 </div>
               </form>
+              )}
 
               <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
                 <div className="divide-y divide-slate-100">
@@ -921,66 +1110,72 @@ export function AdminDashboard({
                       </div>
 
                       <div className="flex items-center gap-1.5 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => handleSwapOrder('specializations', sortedSpecs, idx, -1)}
-                          disabled={idx === 0}
-                          aria-label={`رفع ترتيب ${spec.name}`}
-                          className="min-h-[36px] min-w-[36px] rounded-lg border border-slate-200 flex items-center justify-center disabled:opacity-30"
-                        >
-                          <ArrowUp className="w-4 h-4" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleSwapOrder('specializations', sortedSpecs, idx, 1)}
-                          disabled={idx === sortedSpecs.length - 1}
-                          aria-label={`خفض ترتيب ${spec.name}`}
-                          className="min-h-[36px] min-w-[36px] rounded-lg border border-slate-200 flex items-center justify-center disabled:opacity-30"
-                        >
-                          <ArrowDown className="w-4 h-4" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            handleToggleStatus('specializations', spec.id, spec.status, spec.name)
-                          }
-                          aria-label={spec.status === 'published' ? `إخفاء ${spec.name}` : `نشر ${spec.name}`}
-                          className="min-h-[36px] px-3 rounded-lg bg-[#EAF4F7] text-xs font-semibold text-[#0B2545]"
-                        >
-                          {spec.status === 'published' ? 'إخفاء' : 'نشر'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setEditingSpec(spec);
-                            setSpecName(spec.name);
-                            setSpecDesc(spec.description || '');
-                            setSpecIcon(spec.iconKey);
-                            setSpecStatus(spec.status);
-                          }}
-                          aria-label={`تعديل ${spec.name}`}
-                          className="min-h-[36px] min-w-[36px] rounded-lg border border-slate-200 flex items-center justify-center text-[#0B2545]"
-                        >
-                          <Edit3 className="w-4 h-4" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setConfirmDelete({
-                              title: `هل أنت متأكد من حذف تخصص "${spec.name}"؟`,
-                              onConfirm: async () => {
-                                await deleteDoc(doc(db, 'specializations', spec.id));
-                                await logAdminAction('حذف تخصص', 'specialization', spec.id, spec.name);
-                                await refreshAdminCatalog();
-                                showToast('تم حذف التخصص.');
-                              },
-                            })
-                          }
-                          aria-label={`حذف ${spec.name}`}
-                          className="min-h-[36px] min-w-[36px] rounded-lg border border-slate-200 flex items-center justify-center text-[#FF8066]"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        {(isSuperAdmin || hasPerm('specializations.edit')) && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => handleSwapOrder('specializations', sortedSpecs, idx, -1)}
+                              disabled={idx === 0}
+                              aria-label={`رفع ترتيب ${spec.name}`}
+                              className="min-h-[36px] min-w-[36px] rounded-lg border border-slate-200 flex items-center justify-center disabled:opacity-30"
+                            >
+                              <ArrowUp className="w-4 h-4" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleSwapOrder('specializations', sortedSpecs, idx, 1)}
+                              disabled={idx === sortedSpecs.length - 1}
+                              aria-label={`خفض ترتيب ${spec.name}`}
+                              className="min-h-[36px] min-w-[36px] rounded-lg border border-slate-200 flex items-center justify-center disabled:opacity-30"
+                            >
+                              <ArrowDown className="w-4 h-4" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleToggleStatus('specializations', spec.id, spec.status, spec.name)
+                              }
+                              aria-label={spec.status === 'published' ? `إخفاء ${spec.name}` : `نشر ${spec.name}`}
+                              className="min-h-[36px] px-3 rounded-lg bg-[#EAF4F7] text-xs font-semibold text-[#0B2545]"
+                            >
+                              {spec.status === 'published' ? 'إخفاء' : 'نشر'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingSpec(spec);
+                                setSpecName(spec.name);
+                                setSpecDesc(spec.description || '');
+                                setSpecIcon(spec.iconKey);
+                                setSpecStatus(spec.status);
+                              }}
+                              aria-label={`تعديل ${spec.name}`}
+                              className="min-h-[36px] min-w-[36px] rounded-lg border border-slate-200 flex items-center justify-center text-[#0B2545]"
+                            >
+                              <Edit3 className="w-4 h-4" />
+                            </button>
+                          </>
+                        )}
+                        {(isSuperAdmin || hasPerm('specializations.delete')) && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setConfirmDelete({
+                                title: `هل أنت متأكد من حذف تخصص "${spec.name}"؟`,
+                                onConfirm: async () => {
+                                  await deleteDoc(doc(db, 'specializations', spec.id));
+                                  await logAdminAction('حذف تخصص', 'specialization', spec.id, spec.name);
+                                  await refreshAdminCatalog();
+                                  showToast('تم حذف التخصص.');
+                                },
+                              })
+                            }
+                            aria-label={`حذف ${spec.name}`}
+                            className="min-h-[36px] min-w-[36px] rounded-lg border border-slate-200 flex items-center justify-center text-[#FF8066]"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -1371,6 +1566,9 @@ export function AdminDashboard({
                   </div>
                 </div>
 
+                {(isSuperAdmin ||
+                  hasPerm('subjects.create') ||
+                  (editingSub && hasPerm('subjects.edit'))) && (
                 <form onSubmit={handleSaveSubject} className="space-y-4 pt-2 border-t border-slate-100">
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
@@ -1442,6 +1640,7 @@ export function AdminDashboard({
                     )}
                   </div>
                 </form>
+                )}
               </div>
 
               <div className="bg-white rounded-2xl border border-slate-200 divide-y divide-slate-100">
@@ -1467,64 +1666,71 @@ export function AdminDashboard({
                         </div>
                       </div>
                       <div className="flex items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => handleSwapOrder('subjects', subjectsForAdmin, idx, -1)}
-                          disabled={idx === 0}
-                          aria-label={`رفع ${sub.name}`}
-                          className="min-h-[36px] min-w-[36px] rounded-lg border border-slate-200 flex items-center justify-center disabled:opacity-30"
-                        >
-                          <ArrowUp className="w-4 h-4" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleSwapOrder('subjects', subjectsForAdmin, idx, 1)}
-                          disabled={idx === subjectsForAdmin.length - 1}
-                          aria-label={`خفض ${sub.name}`}
-                          className="min-h-[36px] min-w-[36px] rounded-lg border border-slate-200 flex items-center justify-center disabled:opacity-30"
-                        >
-                          <ArrowDown className="w-4 h-4" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            handleToggleStatus('subjects', sub.id, sub.status, sub.name)
-                          }
-                          className="min-h-[36px] px-3 rounded-lg bg-[#EAF4F7] text-xs font-semibold"
-                        >
-                          {sub.status === 'published' ? 'إخفاء' : 'نشر'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setEditingSub(sub);
-                            setSubName(sub.name);
-                            setSubDesc(sub.description || '');
-                            setSubIcon(sub.iconKey);
-                            setSubStatus(sub.status);
-                          }}
-                          aria-label={`تعديل ${sub.name}`}
-                          className="min-h-[36px] min-w-[36px] rounded-lg border border-slate-200 flex items-center justify-center"
-                        >
-                          <Edit3 className="w-4 h-4" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setConfirmDelete({
-                              title: `هل تريد حذف مادة "${sub.name}"؟`,
-                              onConfirm: async () => {
-                                await deleteDoc(doc(db, 'subjects', sub.id));
-                                await refreshAdminCatalog();
-                                showToast('تم حذف المادة الدراسية.');
-                              },
-                            })
-                          }
-                          aria-label={`حذف ${sub.name}`}
-                          className="min-h-[36px] min-w-[36px] rounded-lg border border-slate-200 flex items-center justify-center text-[#FF8066]"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        {(isSuperAdmin || hasPerm('subjects.edit')) && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => handleSwapOrder('subjects', subjectsForAdmin, idx, -1)}
+                              disabled={idx === 0}
+                              aria-label={`رفع ${sub.name}`}
+                              className="min-h-[36px] min-w-[36px] rounded-lg border border-slate-200 flex items-center justify-center disabled:opacity-30"
+                            >
+                              <ArrowUp className="w-4 h-4" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleSwapOrder('subjects', subjectsForAdmin, idx, 1)}
+                              disabled={idx === subjectsForAdmin.length - 1}
+                              aria-label={`خفض ${sub.name}`}
+                              className="min-h-[36px] min-w-[36px] rounded-lg border border-slate-200 flex items-center justify-center disabled:opacity-30"
+                            >
+                              <ArrowDown className="w-4 h-4" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleToggleStatus('subjects', sub.id, sub.status, sub.name)
+                              }
+                              className="min-h-[36px] px-3 rounded-lg bg-[#EAF4F7] text-xs font-semibold"
+                            >
+                              {sub.status === 'published' ? 'إخفاء' : 'نشر'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingSub(sub);
+                                setSubName(sub.name);
+                                setSubDesc(sub.description || '');
+                                setSubIcon(sub.iconKey);
+                                setSubStatus(sub.status);
+                              }}
+                              aria-label={`تعديل ${sub.name}`}
+                              className="min-h-[36px] min-w-[36px] rounded-lg border border-slate-200 flex items-center justify-center"
+                            >
+                              <Edit3 className="w-4 h-4" />
+                            </button>
+                          </>
+                        )}
+                        {(isSuperAdmin || hasPerm('subjects.delete')) && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setConfirmDelete({
+                                title: `هل تريد حذف مادة "${sub.name}"؟`,
+                                onConfirm: async () => {
+                                  await deleteDoc(doc(db, 'subjects', sub.id));
+                                  await logAdminAction('حذف مادة دراسية', 'subject', sub.id, sub.name);
+                                  await refreshAdminCatalog();
+                                  showToast('تم حذف المادة الدراسية.');
+                                },
+                              })
+                            }
+                            aria-label={`حذف ${sub.name}`}
+                            className="min-h-[36px] min-w-[36px] rounded-lg border border-slate-200 flex items-center justify-center text-[#FF8066]"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
                       </div>
                     </div>
                   ))
@@ -1610,44 +1816,50 @@ export function AdminDashboard({
                               >
                                 <Eye className="w-4 h-4" />
                               </button>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  handleToggleStatus('lectureFiles', file.id, file.status, file.title)
-                                }
-                                aria-label={file.status === 'published' ? `إخفاء ${file.title}` : `نشر ${file.title}`}
-                                className="min-h-[34px] min-w-[34px] rounded-lg border border-slate-200 flex items-center justify-center text-[#0B2545]"
-                              >
-                                {file.status === 'published' ? (
-                                  <EyeOff className="w-4 h-4" />
-                                ) : (
-                                  <Eye className="w-4 h-4 text-[#00A6A6]" />
-                                )}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setEditingFile(file);
-                                  setActiveTab('upload');
-                                }}
-                                aria-label={`تعديل ${file.title}`}
-                                className="min-h-[34px] min-w-[34px] rounded-lg border border-slate-200 flex items-center justify-center text-[#0B2545]"
-                              >
-                                <Edit3 className="w-4 h-4" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setConfirmDelete({
-                                    title: `هل تريد حذف ملف "${file.title}" نهائياً؟`,
-                                    onConfirm: () => handleDeleteFile(file),
-                                  })
-                                }
-                                aria-label={`حذف ${file.title}`}
-                                className="min-h-[34px] min-w-[34px] rounded-lg border border-slate-200 flex items-center justify-center text-[#FF8066]"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
+                              {(isSuperAdmin || hasPerm('lectures.publish')) && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleToggleStatus('lectureFiles', file.id, file.status, file.title)
+                                  }
+                                  aria-label={file.status === 'published' ? `إخفاء ${file.title}` : `نشر ${file.title}`}
+                                  className="min-h-[34px] min-w-[34px] rounded-lg border border-slate-200 flex items-center justify-center text-[#0B2545]"
+                                >
+                                  {file.status === 'published' ? (
+                                    <EyeOff className="w-4 h-4" />
+                                  ) : (
+                                    <Eye className="w-4 h-4 text-[#00A6A6]" />
+                                  )}
+                                </button>
+                              )}
+                              {(isSuperAdmin || hasPerm('lectures.edit')) && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingFile(file);
+                                    setActiveTab('upload');
+                                  }}
+                                  aria-label={`تعديل ${file.title}`}
+                                  className="min-h-[34px] min-w-[34px] rounded-lg border border-slate-200 flex items-center justify-center text-[#0B2545]"
+                                >
+                                  <Edit3 className="w-4 h-4" />
+                                </button>
+                              )}
+                              {(isSuperAdmin || hasPerm('lectures.delete')) && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setConfirmDelete({
+                                      title: `هل تريد حذف ملف "${file.title}" نهائياً؟`,
+                                      onConfirm: () => handleDeleteFile(file),
+                                    })
+                                  }
+                                  aria-label={`حذف ${file.title}`}
+                                  className="min-h-[34px] min-w-[34px] rounded-lg border border-slate-200 flex items-center justify-center text-[#FF8066]"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -1816,54 +2028,21 @@ export function AdminDashboard({
             </div>
           )}
 
-          {/* TAB 9: USERS */}
-          {activeTab === 'users' && (
-            <div className="bg-white rounded-2xl border border-slate-200 overflow-x-auto">
-              <table className="w-full text-right text-sm">
-                <thead className="bg-[#EAF4F7]/70 text-xs font-semibold text-[#0B2545]">
-                  <tr>
-                    <th className="p-3.5">الاسم</th>
-                    <th className="p-3.5">البريد الإلكتروني</th>
-                    <th className="p-3.5">الدور</th>
-                    <th className="p-3.5">إدارة الصلاحية</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {users.map((u) => (
-                    <tr key={u.uid}>
-                      <td className="p-3.5 font-semibold text-[#0B2545]">{u.displayName}</td>
-                      <td className="p-3.5 text-xs text-slate-600">{u.email}</td>
-                      <td className="p-3.5 text-xs font-semibold">
-                        {u.role === 'admin' ? (
-                          <span className="text-[#00A6A6]">مشرف</span>
-                        ) : (
-                          <span className="text-slate-600">طالب</span>
-                        )}
-                      </td>
-                      <td className="p-3.5">
-                        {u.uid !== firebaseUser.uid && (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              handleToggleUserRole(
-                                u.uid,
-                                u.role === 'admin' ? 'student' : 'admin'
-                              )
-                            }
-                            className="min-h-[34px] px-3 py-1 rounded-lg bg-[#EAF4F7] hover:bg-[#0B2545] text-[#0B2545] hover:text-white text-xs font-semibold transition-colors"
-                          >
-                            {u.role === 'admin' ? 'تحويل إلى طالب' : 'ترقية إلى مشرف'}
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+          {/* TAB 9: ADMINS & USERS */}
+          {activeTab === 'users' && <AdminManagementPanel onToast={showToast} />}
+
+          {/* TAB 10: STORAGE CAPACITY */}
+          {activeTab === 'storage' && (
+            <StorageCapacityPanel onPreviewFile={onPreviewFile} onToast={showToast} />
           )}
 
-          {/* TAB 10: SETTINGS */}
+          {/* TAB 11: AUDIT LOGS */}
+          {activeTab === 'audit_logs' && <AuditLogsPanel />}
+
+          {/* TAB 12: BACKUPS & RECOVERY */}
+          {activeTab === 'backups' && <BackupRecoveryPanel onToast={showToast} />}
+
+          {/* TAB 13: SETTINGS */}
           {activeTab === 'settings' && (
             <form
               onSubmit={handleSaveSettings}

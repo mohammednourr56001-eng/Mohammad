@@ -8,6 +8,8 @@ export const REGISTRY_PATH = path.resolve(process.cwd(), 'uploads', 'file-regist
 export interface FileRegistryEntry {
   id: string;
   storageName: string;
+  storagePath?: string;
+  sha256?: string;
   originalName: string;
   fileName: string;
   fileExt: string;
@@ -15,6 +17,13 @@ export interface FileRegistryEntry {
   fileSize: number;
   allowDownload: boolean;
   status: 'published' | 'draft';
+  specializationId?: string;
+  academicYearId?: string;
+  semesterId?: string;
+  subjectId?: string;
+  title?: string;
+  uploadedBy?: string;
+  uploadedByEmail?: string;
 }
 
 interface SeedPdfBlueprint {
