@@ -1,0 +1,6 @@
+{
+  "name": "منصة UST للمحاضرات",
+  "description": "منصة جامعة العلوم والتقنية لإدارة وعرض المحاضرات والمقررات والملفات الأكاديمية بطريقة ذكية ومنظمة.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
