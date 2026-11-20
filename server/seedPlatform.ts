@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { writeSampleLecturePdf } from './pdfGenerator.ts';
+import { SafeJsonStore } from './safeJsonStore.ts';
 
 export const UPLOAD_DIR = path.resolve(process.cwd(), 'uploads', 'lectures');
 export const REGISTRY_PATH = path.resolve(process.cwd(), 'uploads', 'file-registry.json');
@@ -17,6 +18,7 @@ export interface FileRegistryEntry {
   fileSize: number;
   allowDownload: boolean;
   status: 'published' | 'draft';
+  lifecycleStatus?: 'active' | 'trashed';
   specializationId?: string;
   academicYearId?: string;
   semesterId?: string;
@@ -489,6 +491,13 @@ export function getInitialCatalog() {
   };
 }
 
+const registryJsonStore = new SafeJsonStore(path.dirname(REGISTRY_PATH));
+const REGISTRY_FILENAME = path.basename(REGISTRY_PATH);
+
+export function flushRegistryWrites(): Promise<void> {
+  return registryJsonStore.flushAll();
+}
+
 export function loadFileRegistry(): Record<string, FileRegistryEntry> {
   const catalog = getInitialCatalog();
   const base: Record<string, FileRegistryEntry> = {};
@@ -505,30 +514,18 @@ export function loadFileRegistry(): Record<string, FileRegistryEntry> {
       status: f.status as 'published' | 'draft',
     };
   }
-  try {
-    if (fs.existsSync(REGISTRY_PATH)) {
-      const parsed = JSON.parse(fs.readFileSync(REGISTRY_PATH, 'utf8')) as Record<
-        string,
-        FileRegistryEntry
-      >;
-      return { ...base, ...parsed };
-    }
-  } catch {
-    // ignore corrupt registry
-  }
-  return base;
+  const parsed = registryJsonStore.readSync<Record<string, FileRegistryEntry>>(REGISTRY_FILENAME, {});
+  return { ...base, ...parsed };
 }
 
 export function upsertFileRegistryEntry(entry: FileRegistryEntry): void {
-  const current = loadFileRegistry();
+  const current = { ...registryJsonStore.readSync<Record<string, FileRegistryEntry>>(REGISTRY_FILENAME, {}) };
   current[entry.id] = entry;
-  fs.mkdirSync(path.dirname(REGISTRY_PATH), { recursive: true });
-  fs.writeFileSync(REGISTRY_PATH, JSON.stringify(current, null, 2), 'utf8');
+  void registryJsonStore.enqueueWrite(REGISTRY_FILENAME, current);
 }
 
 export function removeFileRegistryEntry(fileId: string): void {
-  const current = loadFileRegistry();
+  const current = { ...registryJsonStore.readSync<Record<string, FileRegistryEntry>>(REGISTRY_FILENAME, {}) };
   delete current[fileId];
-  fs.mkdirSync(path.dirname(REGISTRY_PATH), { recursive: true });
-  fs.writeFileSync(REGISTRY_PATH, JSON.stringify(current, null, 2), 'utf8');
+  void registryJsonStore.enqueueWrite(REGISTRY_FILENAME, current);
 }

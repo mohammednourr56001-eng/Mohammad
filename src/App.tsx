@@ -1,7 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useState } from 'react';
 import {
   Bell,
   BookOpen,
+  BrainCircuit,
   CheckCircle2,
   Heart,
   Home,
@@ -20,17 +21,41 @@ import {
   LecturesExplorer,
   LecturesSelectionState,
 } from './components/LecturesExplorer.tsx';
-import { SearchView } from './components/SearchView.tsx';
+import { LoginModal } from './components/LoginModal.tsx';
 import { NotificationsView } from './components/NotificationsView.tsx';
 import { ProfileView } from './components/ProfileView.tsx';
-import { AdminDashboard } from './components/AdminDashboard.tsx';
-import { FilePreviewModal } from './components/FilePreviewModal.tsx';
-import { LoginModal } from './components/LoginModal.tsx';
+import { PWAInstallButton } from './components/PWAInstallButton.tsx';
+import { OfflineIndicator } from './components/PWAStatusBanner.tsx';
+import { SearchView } from './components/SearchView.tsx';
 import { LectureFile, Specialization, Subject } from './types/academic.ts';
+
+const ExamsCenterView = lazy(() =>
+  import('./components/ExamsCenterView.tsx').then((m) => ({ default: m.ExamsCenterView }))
+);
+const AdminDashboard = lazy(() =>
+  import('./components/AdminDashboard.tsx').then((m) => ({ default: m.AdminDashboard }))
+);
+const FilePreviewModal = lazy(() =>
+  import('./components/FilePreviewModal.tsx').then((m) => ({ default: m.FilePreviewModal }))
+);
+
+function ViewLoadingFallback() {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="py-16 flex flex-col items-center justify-center gap-3 text-slate-500"
+    >
+      <div className="w-8 h-8 rounded-full border-3 border-[#EAF4F7] border-t-[#00A6A6] animate-spin" />
+      <span className="text-xs font-semibold text-[#0B2545]">جاري التحميل...</span>
+    </div>
+  );
+}
 
 type StudentScreen =
   | 'home'
   | 'lectures'
+  | 'exams'
   | 'search'
   | 'notifications'
   | 'profile'
@@ -39,6 +64,8 @@ type StudentScreen =
 function PlatformShell() {
   const {
     firebaseUser,
+    role,
+    assignedSpecializationId,
     isStaff,
     openLoginModal,
     claimedInviteBanner,
@@ -88,8 +115,12 @@ function PlatformShell() {
   const navigateToAdmin = () => {
     setIsAdminRoute(true);
     setMobileMenuOpen(false);
+    const targetUrl =
+      role === 'admin' && assignedSpecializationId
+        ? `/admin/specializations/${assignedSpecializationId}`
+        : '/admin';
     try {
-      window.history.pushState({}, '', '/admin');
+      window.history.pushState({}, '', targetUrl);
     } catch {
       // ignore history errors
     }
@@ -147,12 +178,17 @@ function PlatformShell() {
   if (isAdminRoute) {
     return (
       <>
-        <AdminDashboard
-          onExitAdmin={exitAdmin}
-          onPreviewFile={(file) => setPreviewFile(file)}
-        />
-        <FilePreviewModal file={previewFile} onClose={() => setPreviewFile(null)} />
+        <Suspense fallback={<ViewLoadingFallback />}>
+          <AdminDashboard
+            onExitAdmin={exitAdmin}
+            onPreviewFile={(file) => setPreviewFile(file)}
+          />
+          {previewFile && (
+            <FilePreviewModal file={previewFile} onClose={() => setPreviewFile(null)} />
+          )}
+        </Suspense>
         <LoginModal />
+        <OfflineIndicator />
       </>
     );
   }
@@ -161,20 +197,20 @@ function PlatformShell() {
     <div className="min-h-screen bg-white text-[#0B2545] flex flex-col">
       {/* Top Navigation Bar */}
       <header className="sticky top-0 z-30 h-14 sm:h-16 bg-white/95 backdrop-blur-md border-b border-slate-200/80">
-        <div className="max-w-7xl mx-auto h-full px-4 sm:px-6 flex items-center justify-between gap-8">
-          <div className="flex items-center gap-3 shrink-0">
+        <div className="max-w-7xl mx-auto h-full px-3 sm:px-6 flex items-center justify-between gap-2 sm:gap-6">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
             <button
               type="button"
               onClick={() => setMobileMenuOpen(true)}
               aria-label="فتح القائمة الجانبية"
-              className="lg:hidden min-h-[44px] min-w-[44px] -mr-2 rounded-xl text-[#0B2545] hover:bg-[#EAF4F7] flex items-center justify-center transition-colors"
+              className="lg:hidden min-h-[42px] min-w-[42px] -mr-1 rounded-xl text-[#0B2545] hover:bg-[#EAF4F7] flex items-center justify-center transition-colors shrink-0"
             >
               <Menu className="w-5 h-5" />
             </button>
             <button
               type="button"
               onClick={() => setScreen('home')}
-              className="font-display text-base sm:text-lg font-bold tracking-tight text-[#0B2545] whitespace-nowrap shrink-0"
+              className="font-display text-sm sm:text-lg font-bold tracking-tight text-[#0B2545] truncate"
             >
               منصة UST للمحاضرات
             </button>
@@ -187,6 +223,7 @@ function PlatformShell() {
             {[
               { id: 'home', label: 'الرئيسية' },
               { id: 'lectures', label: 'المحاضرات' },
+              { id: 'exams', label: 'الاختبارات' },
               { id: 'search', label: 'البحث' },
               { id: 'notifications', label: 'الإشعارات' },
               { id: 'profile', label: 'حسابي' },
@@ -221,11 +258,14 @@ function PlatformShell() {
           </nav>
 
           <div className="flex items-center gap-2 shrink-0">
+            <div className="hidden sm:flex">
+              <PWAInstallButton compact />
+            </div>
             {isStaff ? (
               <button
                 type="button"
                 onClick={navigateToAdmin}
-                className="min-h-[40px] px-4 py-2 rounded-xl bg-[#0B2545] hover:bg-[#133866] text-white text-xs sm:text-sm font-semibold inline-flex items-center gap-2 transition-colors whitespace-nowrap shrink-0"
+                className="min-h-[38px] sm:min-h-[40px] px-2.5 sm:px-4 py-1.5 sm:py-2 rounded-xl bg-[#0B2545] hover:bg-[#133866] text-white text-xs sm:text-sm font-semibold inline-flex items-center gap-1.5 sm:gap-2 transition-colors whitespace-nowrap shrink-0"
               >
                 <ShieldCheck className="w-4 h-4 text-[#00A6A6]" />
                 لوحة الإدارة
@@ -234,7 +274,7 @@ function PlatformShell() {
               <button
                 type="button"
                 onClick={openLoginModal}
-                className="min-h-[40px] px-4 py-2 rounded-xl bg-[#00A6A6] hover:bg-[#008e8e] text-white text-xs sm:text-sm font-semibold inline-flex items-center gap-2 transition-colors whitespace-nowrap shrink-0"
+                className="min-h-[38px] sm:min-h-[40px] px-2.5 sm:px-4 py-1.5 sm:py-2 rounded-xl bg-[#00A6A6] hover:bg-[#008e8e] text-white text-xs sm:text-sm font-semibold inline-flex items-center gap-1.5 sm:gap-2 transition-colors whitespace-nowrap shrink-0"
               >
                 <LogIn className="w-4 h-4" />
                 تسجيل الدخول
@@ -243,7 +283,7 @@ function PlatformShell() {
               <button
                 type="button"
                 onClick={() => setScreen('profile')}
-                className="min-h-[40px] px-4 py-2 rounded-xl bg-[#EAF4F7] hover:bg-[#d8ecf2] text-[#0B2545] text-xs sm:text-sm font-semibold inline-flex items-center gap-2 transition-colors whitespace-nowrap shrink-0"
+                className="min-h-[38px] sm:min-h-[40px] px-2.5 sm:px-4 py-1.5 sm:py-2 rounded-xl bg-[#EAF4F7] hover:bg-[#d8ecf2] text-[#0B2545] text-xs sm:text-sm font-semibold inline-flex items-center gap-1.5 sm:gap-2 transition-colors whitespace-nowrap shrink-0"
               >
                 <User className="w-4 h-4 text-[#00A6A6]" />
                 {firebaseUser.displayName?.split(' ')[0] || 'حسابي'}
@@ -280,6 +320,7 @@ function PlatformShell() {
                 {[
                   { id: 'home', label: 'الرئيسية', icon: <Home className="w-4 h-4" /> },
                   { id: 'lectures', label: 'المحاضرات', icon: <BookOpen className="w-4 h-4" /> },
+                  { id: 'exams', label: 'الاختبارات والمراجعة الذكية', icon: <BrainCircuit className="w-4 h-4" /> },
                   { id: 'search', label: 'البحث والفلترة', icon: <Search className="w-4 h-4" /> },
                   { id: 'notifications', label: 'الإشعارات والإعلانات', icon: <Bell className="w-4 h-4" /> },
                   { id: 'favorites', label: 'المفضلة', icon: <Heart className="w-4 h-4" /> },
@@ -363,6 +404,7 @@ function PlatformShell() {
               setScreen('search');
             }}
             onOpenNotifications={() => setScreen('notifications')}
+            onOpenExams={() => setScreen('exams')}
             onPreviewFile={(file) => setPreviewFile(file)}
           />
         )}
@@ -375,6 +417,14 @@ function PlatformShell() {
             onPreviewFile={(file) => setPreviewFile(file)}
             onRequireSignIn={openLoginModal}
           />
+        )}
+
+        {screen === 'exams' && (
+          <ErrorBoundary>
+            <Suspense fallback={<ViewLoadingFallback />}>
+              <ExamsCenterView />
+            </Suspense>
+          </ErrorBoundary>
         )}
 
         {screen === 'search' && (
@@ -416,6 +466,13 @@ function PlatformShell() {
               className="hover:text-[#0B2545]"
             >
               تصفح المحاضرات
+            </button>
+            <button
+              type="button"
+              onClick={() => setScreen('exams')}
+              className="hover:text-[#0B2545]"
+            >
+              الاختبارات الذكية
             </button>
             <button
               type="button"
@@ -509,8 +566,13 @@ function PlatformShell() {
       </nav>
 
       {/* Modals */}
-      <FilePreviewModal file={previewFile} onClose={() => setPreviewFile(null)} />
+      <Suspense fallback={null}>
+        {previewFile && (
+          <FilePreviewModal file={previewFile} onClose={() => setPreviewFile(null)} />
+        )}
+      </Suspense>
       <LoginModal />
+      <OfflineIndicator />
     </div>
   );
 }

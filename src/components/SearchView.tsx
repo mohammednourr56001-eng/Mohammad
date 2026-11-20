@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import {
   ArrowLeft,
+  Cloud,
   Download,
   Eye,
   FileText,
@@ -22,10 +23,13 @@ import {
   canPreviewInApp,
   formatFileSizeArabic,
   getCategoryLabel,
+  getEffectiveCoursePlacements,
+  getGoogleDriveDownloadUrl,
   getPublishedSpecializations,
   getSemestersForYear,
   getSubjectsForSemester,
   getYearsForSpecialization,
+  isGoogleDriveFile,
   searchLecturesAndSubjects,
 } from '../utils/academicLogic.ts';
 import { AcademicIcon } from './IconPicker.tsx';
@@ -42,8 +46,15 @@ export function SearchView({
   onPreviewFile: (file: LectureFile) => void;
 }) {
   const { isAdmin } = useAuth();
-  const { specializations, academicYears, semesters, subjects, lectureFiles } =
-    usePlatformData();
+  const {
+    specializations,
+    academicYears,
+    semesters,
+    subjects,
+    programCourses,
+    lectureFileLinks,
+    lectureFiles,
+  } = usePlatformData();
 
   const [queryText, setQueryText] = useState(initialQuery);
   const [specializationId, setSpecializationId] = useState('');
@@ -76,15 +87,21 @@ export function SearchView({
   const subjectsForFilter = useMemo(
     () =>
       specializationId && academicYearId && semesterId
-        ? getSubjectsForSemester(subjects, specializationId, academicYearId, semesterId)
-        : subjects.filter((s) => s.status === 'published' && (!specializationId || s.specializationId === specializationId)),
-    [subjects, specializationId, academicYearId, semesterId]
+        ? getSubjectsForSemester(subjects, specializationId, academicYearId, semesterId, false, programCourses)
+        : subjects.filter((s) => {
+            if (s.status !== 'published') return false;
+            if (!specializationId) return true;
+            return getEffectiveCoursePlacements(s, programCourses, false).some(
+              (p) => p.specializationId === specializationId
+            );
+          }),
+    [subjects, programCourses, specializationId, academicYearId, semesterId]
   );
 
   const results = useMemo(
     () =>
       searchLecturesAndSubjects(
-        { specializations, subjects, files: lectureFiles },
+        { specializations, subjects, files: lectureFiles, programCourses, lectureFileLinks },
         {
           query: queryText,
           specializationId,
@@ -97,6 +114,8 @@ export function SearchView({
     [
       specializations,
       subjects,
+      programCourses,
+      lectureFileLinks,
       lectureFiles,
       queryText,
       specializationId,
@@ -357,8 +376,12 @@ export function SearchView({
               const year = academicYears.find((y) => y.id === file.academicYearId);
               const sem = semesters.find((s) => s.id === file.semesterId);
               const sub = subjects.find((s) => s.id === file.subjectId);
-              const previewable = canPreviewInApp(file.fileExt, file.mimeType);
+              const isDrive = isGoogleDriveFile(file);
+              const previewable = canPreviewInApp(file.fileExt, file.mimeType, file);
               const downloadable = canDownloadFile(file, isAdmin);
+              const downloadHref = isDrive
+                ? getGoogleDriveDownloadUrl(file) || file.externalUrl || '#'
+                : `/api/files/download/${encodeURIComponent(file.id)}`;
 
               return (
                 <article
@@ -367,12 +390,24 @@ export function SearchView({
                 >
                   <div className="flex items-start gap-3 min-w-0">
                     <div className="w-11 h-11 rounded-xl bg-[#EAF4F7] text-[#0B2545] flex items-center justify-center shrink-0">
-                      <FileText className="w-5 h-5 text-[#00A6A6]" />
+                      {isDrive ? (
+                        <Cloud className="w-5 h-5 text-[#00A6A6]" />
+                      ) : (
+                        <FileText className="w-5 h-5 text-[#00A6A6]" />
+                      )}
                     </div>
                     <div className="min-w-0 space-y-1">
-                      <h3 className="font-display text-base font-bold text-[#0B2545]">
-                        {file.title}
-                      </h3>
+                      <div className="flex items-center flex-wrap gap-2">
+                        <h3 className="font-display text-base font-bold text-[#0B2545]">
+                          {file.title}
+                        </h3>
+                        {isDrive && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[#EAF4F7] text-[#0B2545] text-[11px] font-semibold">
+                            <Cloud className="w-3 h-3 text-[#00A6A6]" />
+                            Google Drive
+                          </span>
+                        )}
+                      </div>
                       <p className="text-xs text-slate-500 flex items-center flex-wrap gap-1.5">
                         <span>{spec?.name}</span>
                         <span aria-hidden="true">/</span>
@@ -391,7 +426,11 @@ export function SearchView({
                       <p className="text-xs text-slate-500 flex items-center gap-2">
                         <span>{getCategoryLabel(file.category)}</span>
                         <span aria-hidden="true">·</span>
-                        <span className="tabular-nums">{formatFileSizeArabic(file.fileSize)}</span>
+                        <span className="tabular-nums">
+                          {isDrive && (!file.fileSize || file.fileSize <= 0)
+                            ? 'رابط سحابي'
+                            : formatFileSizeArabic(file.fileSize)}
+                        </span>
                       </p>
                     </div>
                   </div>
@@ -409,8 +448,10 @@ export function SearchView({
                     )}
                     {downloadable && (
                       <a
-                        href={`/api/files/download/${encodeURIComponent(file.id)}`}
-                        download={file.originalName}
+                        href={downloadHref}
+                        download={isDrive ? undefined : file.originalName}
+                        target={isDrive ? '_blank' : undefined}
+                        rel={isDrive ? 'noopener noreferrer' : undefined}
                         className="min-h-[40px] px-4 py-2 rounded-xl bg-[#00A6A6] hover:bg-[#008e8e] text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors"
                       >
                         <Download className="w-4 h-4" />

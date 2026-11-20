@@ -11,10 +11,14 @@
         "photoURL": { "type": "string", "maxLength": 512 },
         "googleSub": { "type": "string", "maxLength": 128 },
         "role": { "type": "string", "enum": ["student", "moderator", "admin", "super_admin"] },
-        "permissions": { "type": "array", "maxLength": 25 },
+        "permissions": { "type": "array", "maxLength": 32 },
         "status": { "type": "string", "enum": ["active", "suspended"] },
         "specializationId": { "type": "string", "maxLength": 128 },
         "academicYearId": { "type": "string", "maxLength": 128 },
+        "assignedSpecializationId": { "type": "string", "maxLength": 128 },
+        "assignmentId": { "type": "string", "maxLength": 128 },
+        "scopeVersion": { "type": "number" },
+        "lastActivityAt": { "type": "string", "format": "date-time" },
         "createdAt": { "type": "string", "format": "date-time" },
         "lastLoginAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
@@ -23,21 +27,70 @@
     },
     "AdminEntry": {
       "title": "AdminEntry",
-      "description": "Trusted staff/admin permission entry keyed by Firebase Auth UID.",
+      "description": "Trusted staff/admin permission entry keyed by Firebase Auth UID with optional specialization scope.",
       "type": "object",
       "properties": {
         "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "email": { "type": "string", "format": "email", "maxLength": 254 },
         "displayName": { "type": "string", "maxLength": 120 },
         "role": { "type": "string", "enum": ["super_admin", "admin", "moderator"] },
-        "permissions": { "type": "array", "maxLength": 25 },
+        "permissions": { "type": "array", "maxLength": 32 },
         "status": { "type": "string", "enum": ["active", "suspended"] },
+        "assignedSpecializationId": { "type": "string", "maxLength": 128 },
+        "assignmentId": { "type": "string", "maxLength": 128 },
+        "scopeVersion": { "type": "number" },
+        "lastActivityAt": { "type": "string", "format": "date-time" },
         "assignedProfileName": { "type": "string", "maxLength": 120 },
         "inviteId": { "type": "string", "maxLength": 128 },
         "addedAt": { "type": "string", "format": "date-time" },
-        "addedBy": { "type": "string", "maxLength": 128 }
+        "addedBy": { "type": "string", "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "updatedBy": { "type": "string", "maxLength": 128 }
       },
       "required": ["uid", "email", "role", "permissions", "status", "addedAt"]
+    },
+    "AdminAssignment": {
+      "title": "AdminAssignment",
+      "description": "Explicit specialization-scoped admin assignment record created and managed by Super Admin.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "format": "email", "maxLength": 254 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "photoURL": { "type": "string", "maxLength": 512 },
+        "role": { "type": "string", "enum": ["admin"] },
+        "specializationId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "specializationName": { "type": "string", "maxLength": 140 },
+        "status": { "type": "string", "enum": ["active", "suspended"] },
+        "permissions": { "type": "array", "maxLength": 32 },
+        "scopeVersion": { "type": "number" },
+        "assignedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "assignedByEmail": { "type": "string", "maxLength": 254 },
+        "assignedAt": { "type": "string", "format": "date-time" },
+        "lastActivityAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "updatedBy": { "type": "string", "maxLength": 128 },
+        "notes": { "type": "string", "maxLength": 400 }
+      },
+      "required": ["id", "uid", "email", "displayName", "role", "specializationId", "status", "permissions", "scopeVersion", "assignedBy", "assignedByEmail", "assignedAt", "updatedAt"]
+    },
+    "AdminPermissionRecord": {
+      "title": "AdminPermissionRecord",
+      "description": "Normalized per-permission row for specialization-scoped administrators.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 160, "pattern": "^[a-zA-Z0-9_\\-.]+$" },
+        "assignmentId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "specializationId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "permissionKey": { "type": "string", "minLength": 3, "maxLength": 80 },
+        "granted": { "type": "boolean" },
+        "grantedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "assignmentId", "uid", "specializationId", "permissionKey", "granted", "grantedBy", "createdAt", "updatedAt"]
     },
     "AdminInvitation": {
       "title": "AdminInvitation",
@@ -47,7 +100,8 @@
         "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "email": { "type": "string", "format": "email", "maxLength": 254 },
         "role": { "type": "string", "enum": ["admin", "moderator"] },
-        "permissions": { "type": "array", "maxLength": 25 },
+        "permissions": { "type": "array", "maxLength": 32 },
+        "assignedSpecializationId": { "type": "string", "maxLength": 128 },
         "profileName": { "type": "string", "maxLength": 120 },
         "status": { "type": "string", "enum": ["pending", "accepted", "revoked"] },
         "invitedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
@@ -67,7 +121,7 @@
         "name": { "type": "string", "minLength": 2, "maxLength": 120 },
         "description": { "type": "string", "maxLength": 400 },
         "baseRole": { "type": "string", "enum": ["admin", "moderator"] },
-        "permissions": { "type": "array", "maxLength": 25 },
+        "permissions": { "type": "array", "maxLength": 32 },
         "createdBy": { "type": "string", "minLength": 1, "maxLength": 128 },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
@@ -132,6 +186,9 @@
         "academicYearId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "semesterId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "name": { "type": "string", "minLength": 2, "maxLength": 140 },
+        "code": { "type": "string", "maxLength": 40 },
+        "curriculumVersion": { "type": "string", "maxLength": 80 },
+        "academicContext": { "type": "string", "maxLength": 140 },
         "description": { "type": "string", "maxLength": 500 },
         "iconKey": { "type": "string", "minLength": 1, "maxLength": 60 },
         "status": { "type": "string", "enum": ["published", "draft"] },
@@ -140,6 +197,24 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "specializationId", "academicYearId", "semesterId", "name", "iconKey", "status", "sortOrder", "createdAt", "updatedAt"]
+    },
+    "ProgramCourseLink": {
+      "title": "ProgramCourseLink",
+      "description": "Many-to-many junction record linking a canonical course/subject to an additional specialization, academic year, and semester.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "courseId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "specializationId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "academicYearId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "semesterId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "status": { "type": "string", "enum": ["published", "draft"] },
+        "sortOrder": { "type": "number" },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "courseId", "specializationId", "academicYearId", "semesterId", "status", "sortOrder", "createdAt", "updatedAt"]
     },
     "LectureFile": {
       "title": "LectureFile",
@@ -169,6 +244,9 @@
         },
         "lectureNumber": { "type": "string", "maxLength": 40 },
         "version": { "type": "string", "maxLength": 40 },
+        "sourceType": { "type": "string", "enum": ["upload", "google_drive"] },
+        "externalUrl": { "type": "string", "maxLength": 1000, "pattern": "^https://(drive|docs)\\.google\\.com/.+$" },
+        "driveFileId": { "type": "string", "maxLength": 180, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "fileName": { "type": "string", "minLength": 1, "maxLength": 260 },
         "originalName": { "type": "string", "minLength": 1, "maxLength": 260 },
         "fileExt": { "type": "string", "minLength": 1, "maxLength": 20 },
@@ -179,6 +257,9 @@
         "sha256": { "type": "string", "maxLength": 128 },
         "allowDownload": { "type": "boolean" },
         "status": { "type": "string", "enum": ["published", "draft"] },
+        "lifecycleStatus": { "type": "string", "enum": ["active", "trashed", "needs_review"] },
+        "deletedAt": { "type": "string", "maxLength": 64 },
+        "deletedBy": { "type": "string", "maxLength": 128 },
         "sortOrder": { "type": "number" },
         "uploadedBy": { "type": "string", "maxLength": 128 },
         "uploadedByEmail": { "type": "string", "maxLength": 254 },
@@ -207,6 +288,25 @@
         "createdAt",
         "updatedAt"
       ]
+    },
+    "LectureFileLink": {
+      "title": "LectureFileLink",
+      "description": "Many-to-many academic destination mapping linking a canonical central LectureFile to multiple specializations, years, semesters, and subjects without file duplication.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "lectureFileId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "specializationId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "academicYearId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "semesterId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "subjectId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "status": { "type": "string", "enum": ["published", "draft"] },
+        "sortOrder": { "type": "number" },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "lectureFileId", "specializationId", "academicYearId", "semesterId", "subjectId", "status", "sortOrder", "createdAt", "updatedAt"]
     },
     "Announcement": {
       "title": "Announcement",
@@ -278,6 +378,11 @@
         "entityType": { "type": "string", "minLength": 1, "maxLength": 80 },
         "entityId": { "type": "string", "minLength": 1, "maxLength": 128 },
         "entityName": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "specializationId": { "type": "string", "maxLength": 128 },
+        "targetUid": { "type": "string", "maxLength": 128 },
+        "targetEmail": { "type": "string", "maxLength": 254 },
+        "oldValue": { "type": "string", "maxLength": 400 },
+        "newValue": { "type": "string", "maxLength": 400 },
         "result": { "type": "string", "enum": ["success", "denied", "failed"] },
         "details": { "type": "string", "maxLength": 400 },
         "createdAt": { "type": "string", "format": "date-time" }
@@ -319,6 +424,129 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "type", "status", "totalRecords", "totalFiles", "totalBytes", "createdBy", "createdByEmail", "createdAt"]
+    },
+    "ExamAttempt": {
+      "title": "ExamAttempt",
+      "description": "Server-validated idempotent examination attempt record.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "examId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "examTitle": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "subjectId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "idempotencyKey": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "score": { "type": "number" },
+        "totalQuestions": { "type": "number" },
+        "percentage": { "type": "number" },
+        "durationSeconds": { "type": "number" },
+        "submittedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "examId", "examTitle", "subjectId", "userId", "idempotencyKey", "score", "totalQuestions", "percentage", "durationSeconds", "submittedAt"]
+    },
+    "GoogleConnection": {
+      "title": "GoogleConnection",
+      "description": "Per-user non-secret verification status for each Google Workspace integration (never stores OAuth tokens or secrets).",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "serviceKey": { "type": "string", "enum": ["picker", "sheets", "forms", "gmail", "calendar", "classroom"] },
+        "status": { "type": "string", "enum": ["connected", "disconnected", "error"] },
+        "connectedEmail": { "type": "string", "maxLength": 254 },
+        "lastVerifiedAt": { "type": "string", "maxLength": 64 },
+        "lastError": { "type": "string", "maxLength": 400 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "serviceKey", "status", "lastVerifiedAt", "createdAt", "updatedAt"]
+    },
+    "GoogleIntegration": {
+      "title": "GoogleIntegration",
+      "description": "Platform-level configuration and zero-cost availability metadata for Google Workspace services managed by Super Admin.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "serviceKey": { "type": "string", "enum": ["picker", "sheets", "forms", "gmail", "calendar", "classroom"] },
+        "enabled": { "type": "boolean" },
+        "title": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "description": { "type": "string", "maxLength": 400 },
+        "zeroCostVerified": { "type": "boolean" },
+        "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "serviceKey", "enabled", "title", "zeroCostVerified", "updatedBy", "createdAt", "updatedAt"]
+    },
+    "AcademicForm": {
+      "title": "AcademicForm",
+      "description": "University quizzes, surveys, and evaluations backed by Google Forms organized by specialization and academic year.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "minLength": 2, "maxLength": 200 },
+        "description": { "type": "string", "maxLength": 600 },
+        "formId": { "type": "string", "minLength": 8, "maxLength": 180, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "responderUri": { "type": "string", "maxLength": 1000 },
+        "editUri": { "type": "string", "maxLength": 1000 },
+        "specializationId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "academicYearId": { "type": "string", "maxLength": 128 },
+        "subjectId": { "type": "string", "maxLength": 128 },
+        "formCategory": { "type": "string", "enum": ["quiz", "survey", "assignment", "feedback"] },
+        "status": { "type": "string", "enum": ["published", "draft"] },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdByEmail": { "type": "string", "maxLength": 254 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "title", "formId", "responderUri", "specializationId", "formCategory", "status", "createdBy", "createdAt", "updatedAt"]
+    },
+    "AcademicCalendar": {
+      "title": "AcademicCalendar",
+      "description": "Academic lecture, exam, and deadline events synced with Google Calendar.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "minLength": 2, "maxLength": 180 },
+        "description": { "type": "string", "maxLength": 800 },
+        "specializationId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "academicYearId": { "type": "string", "maxLength": 128 },
+        "subjectId": { "type": "string", "maxLength": 128 },
+        "eventType": { "type": "string", "enum": ["lecture", "exam", "deadline", "seminar"] },
+        "startsAt": { "type": "string", "maxLength": 64 },
+        "endsAt": { "type": "string", "maxLength": 64 },
+        "location": { "type": "string", "maxLength": 200 },
+        "googleCalendarId": { "type": "string", "maxLength": 254 },
+        "googleEventId": { "type": "string", "maxLength": 254 },
+        "googleHtmlLink": { "type": "string", "maxLength": 1000 },
+        "status": { "type": "string", "enum": ["published", "draft"] },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "title", "specializationId", "eventType", "startsAt", "endsAt", "status", "createdBy", "createdAt", "updatedAt"]
+    },
+    "GooglePickedFile": {
+      "title": "GooglePickedFile",
+      "description": "Reference to a Google Drive file selected via Google Picker (managed exclusively by Super Admin for course repositories).",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "driveFileId": { "type": "string", "minLength": 8, "maxLength": 180, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 260 },
+        "mimeType": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "url": { "type": "string", "maxLength": 1000 },
+        "iconUrl": { "type": "string", "maxLength": 512 },
+        "sizeBytes": { "type": "number" },
+        "linkedLectureFileId": { "type": "string", "maxLength": 128 },
+        "specializationId": { "type": "string", "maxLength": 128 },
+        "status": { "type": "string", "enum": ["active", "archived"] },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdByEmail": { "type": "string", "maxLength": 254 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "driveFileId", "name", "mimeType", "url", "status", "createdBy", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -336,7 +564,15 @@
     },
     "/admins/{userId}": {
       "schema": { "$ref": "#/entities/AdminEntry" },
-      "description": "Trusted staff UID lookup with role and granular permissions."
+      "description": "Trusted staff UID lookup with role, assignedSpecializationId, and granular permissions."
+    },
+    "/adminAssignments/{assignmentId}": {
+      "schema": { "$ref": "#/entities/AdminAssignment" },
+      "description": "Specialization-scoped administrator assignments managed exclusively by Super Admin."
+    },
+    "/adminPermissions/{permissionId}": {
+      "schema": { "$ref": "#/entities/AdminPermissionRecord" },
+      "description": "Normalized per-permission entries linked to specialization admin assignments."
     },
     "/adminInvitations/{inviteId}": {
       "schema": { "$ref": "#/entities/AdminInvitation" },
@@ -385,6 +621,38 @@
     "/backups/{backupId}": {
       "schema": { "$ref": "#/entities/BackupRecord" },
       "description": "Backup manifest records managed by Super Admin."
+    },
+    "/examAttempts/{attemptId}": {
+      "schema": { "$ref": "#/entities/ExamAttempt" },
+      "description": "Student examination attempt records isolated to owner or Super Admin."
+    },
+    "/programCourses/{linkId}": {
+      "schema": { "$ref": "#/entities/ProgramCourseLink" },
+      "description": "Many-to-many junction collection linking canonical courses across specializations, academic years, and semesters."
+    },
+    "/lectureFileLinks/{linkId}": {
+      "schema": { "$ref": "#/entities/LectureFileLink" },
+      "description": "Many-to-many distribution junction linking canonical lecture files across specializations, academic years, semesters, and subjects."
+    },
+    "/users/{userId}/googleConnections/{connectionId}": {
+      "schema": { "$ref": "#/entities/GoogleConnection" },
+      "description": "Owner-isolated verification metadata for Google Workspace services (tokens never stored)."
+    },
+    "/googleIntegrations/{integrationId}": {
+      "schema": { "$ref": "#/entities/GoogleIntegration" },
+      "description": "Platform-level Google Workspace service status managed by Super Admin."
+    },
+    "/academicForms/{formId}": {
+      "schema": { "$ref": "#/entities/AcademicForm" },
+      "description": "Academic forms and quizzes backed by Google Forms organized by specialization."
+    },
+    "/academicCalendars/{calendarId}": {
+      "schema": { "$ref": "#/entities/AcademicCalendar" },
+      "description": "Academic lecture, exam, and deadline events linked with Google Calendar."
+    },
+    "/googleFiles/{fileId}": {
+      "schema": { "$ref": "#/entities/GooglePickedFile" },
+      "description": "Google Picker selected file references managed exclusively by Super Admin for course repositories."
     }
   }
 }

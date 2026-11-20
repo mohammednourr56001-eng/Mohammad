@@ -1,0 +1,72 @@
+rules_version = '2';
+
+// =============================================================================
+// UST Platform — Firebase Cloud Storage Security Rules
+// =============================================================================
+// Protects lecture binary assets stored under:
+//   lectures/{specializationId}/{yearId}/{semesterId}/{subjectId}/{fileName}
+//   public-assets/{assetName}
+// Rejects unauthenticated uploads, oversized files (> 100 MB), and forbidden
+// executable/script MIME types.
+// =============================================================================
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function isBootstrappedSuperAdmin() {
+      return isSignedIn() &&
+        request.auth.token.email.lower() == 'mohammednourr56000@gmail.com';
+    }
+
+    function isSuperAdminToken() {
+      return isBootstrappedSuperAdmin() || (
+        isSignedIn() &&
+        request.auth.token.ust_role == 'super_admin'
+      );
+    }
+
+    function isAllowedLectureContentType(ct) {
+      return ct.matches('application/pdf') ||
+        ct.matches('application/msword') ||
+        ct.matches('application/vnd\\.openxmlformats-officedocument\\..*') ||
+        ct.matches('application/vnd\\.ms-powerpoint') ||
+        ct.matches('application/vnd\\.ms-excel') ||
+        ct.matches('application/zip') ||
+        ct.matches('application/x-zip-compressed') ||
+        ct.matches('image/(jpeg|png|webp)');
+    }
+
+    // Default deny
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+
+    // Educational Lecture Files (upload/modify/delete exclusive to Super Admin)
+    match /lectures/{pathSegment=**} {
+      // Published course downloads may be read by authenticated/authorized clients or CDN signed tokens
+      allow read: if request.auth != null;
+
+      allow create, update: if isSuperAdminToken() &&
+        request.resource != null &&
+        request.resource.size > 0 &&
+        request.resource.size <= 104857600 &&
+        isAllowedLectureContentType(request.resource.contentType);
+
+      allow delete: if isSuperAdminToken();
+    }
+
+    // User profile avatars (strict owner isolation)
+    match /avatars/{userId}/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if isSignedIn() &&
+        request.auth.uid == userId &&
+        request.resource != null &&
+        request.resource.size > 0 &&
+        request.resource.size <= 2097152 &&
+        request.resource.contentType.matches('image/(jpeg|png|webp)');
+    }
+  }
+}

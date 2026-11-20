@@ -8,6 +8,8 @@ import {
   HardDrive,
   Loader2,
   Save,
+  ShieldCheck,
+  XCircle,
 } from 'lucide-react';
 import { doc, serverTimestamp, setDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase.ts';
@@ -20,6 +22,7 @@ export function BackupRecoveryPanel({ onToast }: { onToast: (msg: string) => voi
   const { backups, settings, refreshBackups, refreshAuditLogs } = usePlatformData();
 
   const [creatingType, setCreatingType] = useState<'database' | 'files' | 'full' | null>(null);
+  const [verifyingId, setVerifyingId] = useState<string | null>(null);
   const [notes, setNotes] = useState('');
   const [retentionDays, setRetentionDays] = useState<number>(settings.backupRetentionDays || 30);
   const [schedule, setSchedule] = useState<'daily' | 'weekly' | 'manual'>(
@@ -77,6 +80,31 @@ export function BackupRecoveryPanel({ onToast }: { onToast: (msg: string) => voi
       URL.revokeObjectURL(url);
     } catch {
       onToast('حدث خطأ أثناء تحميل النسخة الاحتياطية.');
+    }
+  };
+
+  const handleVerifyBackup = async (backupId: string) => {
+    if (!canManageBackups) return;
+    setVerifyingId(backupId);
+    try {
+      const token = await getIdToken();
+      if (!token) throw new Error('يرجى إعادة تسجيل الدخول.');
+      const res = await fetch(`/api/backups/${encodeURIComponent(backupId)}/verify-restore`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || 'تعذر تنفيذ اختبار الاستعادة.');
+      await Promise.all([refreshBackups(), refreshAuditLogs()]);
+      onToast(
+        body.ok
+          ? 'نجح اختبار الاستعادة والتحقق من بصمة SHA-256.'
+          : 'رصد اختبار الاستعادة خللاً في سلامة النسخة الاحتياطية!'
+      );
+    } catch (err) {
+      onToast(err instanceof Error ? err.message : 'فشل التحقق من النسخة.');
+    } finally {
+      setVerifyingId(null);
     }
   };
 
@@ -266,14 +294,35 @@ export function BackupRecoveryPanel({ onToast }: { onToast: (msg: string) => voi
                       : b.type === 'files'
                         ? 'ملفات المحاضرات'
                         : 'نسخة شاملة'}
-                    <div className="flex items-center gap-1 text-[11px] font-normal text-[#00A6A6] mt-0.5">
-                      <CheckCircle2 className="w-3 h-3" />
-                      مكتملة
+                    <div className="flex items-center gap-1 text-[11px] font-normal mt-0.5">
+                      {b.verifiedStatus === 'verified' ? (
+                        <span className="inline-flex items-center gap-1 text-[#00A6A6] font-semibold">
+                          <CheckCircle2 className="w-3 h-3" />
+                          موثقة بالاختبار
+                        </span>
+                      ) : b.verifiedStatus === 'failed' ? (
+                        <span className="inline-flex items-center gap-1 text-[#FF8066] font-semibold">
+                          <XCircle className="w-3 h-3" />
+                          فشل اختبار الاستعادة
+                        </span>
+                      ) : (
+                        <span className="text-amber-700 font-medium">
+                          منشأة (لم يُختبر الاسترداد بعد)
+                        </span>
+                      )}
                     </div>
                   </td>
                   <td className="p-3.5 text-xs text-slate-600 tabular-nums">
                     {b.totalRecords > 0 && <span>{b.totalRecords} سجل · </span>}
                     {b.totalFiles > 0 && <span>{b.totalFiles} ملف</span>}
+                    {b.integritySha256 && (
+                      <p className="text-[10px] font-mono text-slate-400 mt-0.5">
+                        SHA-256: {b.integritySha256.slice(0, 14)}…
+                      </p>
+                    )}
+                    {b.verifiedNotes && (
+                      <p className="text-[10px] text-[#008080] mt-0.5">{b.verifiedNotes}</p>
+                    )}
                     {b.notes && <p className="text-[11px] text-slate-400 mt-0.5">{b.notes}</p>}
                   </td>
                   <td className="p-3.5 text-xs text-slate-600 tabular-nums">
@@ -284,14 +333,25 @@ export function BackupRecoveryPanel({ onToast }: { onToast: (msg: string) => voi
                     {new Date(b.createdAt).toLocaleString('ar-EG')}
                   </td>
                   <td className="p-3.5">
-                    <button
-                      type="button"
-                      onClick={() => handleDownloadBackup(b.id)}
-                      className="min-h-[34px] px-3 py-1 rounded-lg bg-[#EAF4F7] hover:bg-[#00A6A6] text-[#0B2545] hover:text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors"
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                      تنزيل
-                    </button>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <button
+                        type="button"
+                        disabled={verifyingId === b.id}
+                        onClick={() => handleVerifyBackup(b.id)}
+                        className="min-h-[34px] px-3 py-1 rounded-lg bg-[#0B2545] hover:bg-[#133866] text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors disabled:opacity-50"
+                      >
+                        <ShieldCheck className="w-3.5 h-3.5 text-[#00A6A6]" />
+                        {verifyingId === b.id ? 'جاري الاختبار...' : 'اختبار الاستعادة'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadBackup(b.id)}
+                        className="min-h-[34px] px-3 py-1 rounded-lg bg-[#EAF4F7] hover:bg-[#00A6A6] text-[#0B2545] hover:text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        تنزيل
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))

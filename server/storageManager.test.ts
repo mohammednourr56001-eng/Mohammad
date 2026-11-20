@@ -4,6 +4,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import {
+  buildCentralStorageLocation,
   buildHierarchicalStorageLocation,
   computeFileSha256,
   resolvePhysicalFilePath,
@@ -32,6 +33,21 @@ test('buildHierarchicalStorageLocation creates deterministic academic folder lay
   );
   assert.ok(loc.fullPath.startsWith(UST_STORAGE_ROOT));
   assert.equal(path.basename(loc.fullPath), 'ust_123_abc.pdf');
+});
+
+test('buildCentralStorageLocation stores files centrally independent of specialization', () => {
+  const loc = buildCentralStorageLocation({
+    sha256: 'ab12cd34ef56789012345678',
+    storageName: '../evil/ust_calculus_1.pdf',
+  });
+  assert.equal(loc.storagePath, 'central/ab12cd34ef567890/ust_calculus_1.pdf');
+  assert.ok(loc.fullPath.startsWith(UST_STORAGE_ROOT));
+  assert.equal(path.basename(loc.fullPath), 'ust_calculus_1.pdf');
+
+  const fallbackLoc = buildCentralStorageLocation({
+    storageName: 'legacy_no_hash.pdf',
+  });
+  assert.equal(fallbackLoc.storagePath, 'central/library/legacy_no_hash.pdf');
 });
 
 test('computeFileSha256 returns stable 64-char hex digest', () => {

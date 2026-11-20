@@ -4,6 +4,7 @@ import {
   BookOpen,
   Calendar,
   ChevronLeft,
+  Cloud,
   Download,
   Eye,
   FileText,
@@ -30,11 +31,14 @@ import {
   countFilesForSubject,
   formatFileSizeArabic,
   getCategoryLabel,
+  getEffectiveCoursePlacements,
   getFilesForSubject,
+  getGoogleDriveDownloadUrl,
   getPublishedSpecializations,
   getSemestersForYear,
   getSubjectsForSemester,
   getYearsForSpecialization,
+  isGoogleDriveFile,
 } from '../utils/academicLogic.ts';
 import { AcademicIcon } from './IconPicker.tsx';
 
@@ -59,8 +63,16 @@ export function LecturesExplorer({
   onRequireSignIn: () => void;
 }) {
   const { firebaseUser, isAdmin, favoriteIds, toggleFavorite } = useAuth();
-  const { specializations, academicYears, semesters, subjects, lectureFiles, loading } =
-    usePlatformData();
+  const {
+    specializations,
+    academicYears,
+    semesters,
+    subjects,
+    programCourses,
+    lectureFileLinks,
+    lectureFiles,
+    loading,
+  } = usePlatformData();
 
   const [activeCategory, setActiveCategory] = useState<LectureCategory | 'all'>('all');
   const [favoriteMessage, setFavoriteMessage] = useState<string | null>(null);
@@ -97,10 +109,12 @@ export function LecturesExplorer({
             subjects,
             selection.specialization.id,
             selection.year.id,
-            selection.semester.id
+            selection.semester.id,
+            false,
+            programCourses
           )
         : [],
-    [subjects, selection.specialization, selection.year, selection.semester]
+    [subjects, programCourses, selection.specialization, selection.year, selection.semester]
   );
 
   const subjectFiles = useMemo(() => {
@@ -117,9 +131,11 @@ export function LecturesExplorer({
       selection.specialization.id,
       selection.year.id,
       selection.semester.id,
-      selection.subject.id
+      selection.subject.id,
+      false,
+      lectureFileLinks
     );
-  }, [lectureFiles, selection]);
+  }, [lectureFiles, lectureFileLinks, selection]);
 
   const filteredFiles = useMemo(() => {
     if (activeCategory === 'all') return subjectFiles;
@@ -378,7 +394,9 @@ export function LecturesExplorer({
                 subjects,
                 selection.specialization!.id,
                 selection.year!.id,
-                sem.id
+                sem.id,
+                false,
+                programCourses
               ).length;
               return (
                 <button
@@ -419,7 +437,18 @@ export function LecturesExplorer({
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {availableSubjects.map((sub) => {
-              const filesCount = countFilesForSubject(lectureFiles, sub.id);
+              const filesCount = countFilesForSubject(
+                lectureFiles,
+                sub.id,
+                false,
+                lectureFileLinks,
+                {
+                  specializationId: selection.specialization!.id,
+                  academicYearId: selection.year!.id,
+                  semesterId: selection.semester!.id,
+                }
+              );
+              const placementsCount = getEffectiveCoursePlacements(sub, programCourses, false).length;
               return (
                 <button
                   key={sub.id}
@@ -435,9 +464,21 @@ export function LecturesExplorer({
                       <AcademicIcon iconKey={sub.iconKey} className="w-6 h-6" />
                     </div>
                     <div className="min-w-0">
-                      <h2 className="font-display text-lg font-bold text-[#0B2545]">
-                        {sub.name}
-                      </h2>
+                      <div className="flex items-center flex-wrap gap-1.5">
+                        <h2 className="font-display text-lg font-bold text-[#0B2545]">
+                          {sub.name}
+                        </h2>
+                        {sub.code && (
+                          <span className="px-2 py-0.5 rounded-md bg-[#EAF4F7] text-[#0B2545] text-[10px] font-mono font-bold">
+                            {sub.code}
+                          </span>
+                        )}
+                        {placementsCount > 1 && (
+                          <span className="px-2 py-0.5 rounded-md bg-[#00A6A6]/12 text-[#00A6A6] text-[10px] font-bold">
+                            مقرر مشترك
+                          </span>
+                        )}
+                      </div>
                       {sub.description && (
                         <p className="text-xs text-slate-600 mt-1 line-clamp-2 leading-relaxed">
                           {sub.description}
@@ -515,9 +556,13 @@ export function LecturesExplorer({
           ) : (
             <div className="space-y-3">
               {filteredFiles.map((file) => {
-                const previewable = canPreviewInApp(file.fileExt, file.mimeType);
+                const isDrive = isGoogleDriveFile(file);
+                const previewable = canPreviewInApp(file.fileExt, file.mimeType, file);
                 const downloadable = canDownloadFile(file, isAdmin);
                 const isFav = favoriteIds.has(file.id);
+                const downloadHref = isDrive
+                  ? getGoogleDriveDownloadUrl(file) || file.externalUrl || '#'
+                  : `/api/files/download/${encodeURIComponent(file.id)}`;
 
                 return (
                   <article
@@ -526,15 +571,27 @@ export function LecturesExplorer({
                   >
                     <div className="flex items-start gap-4 min-w-0">
                       <div className="w-12 h-12 rounded-2xl bg-[#EAF4F7] text-[#0B2545] flex flex-col items-center justify-center shrink-0">
-                        <FileText className="w-5 h-5 text-[#00A6A6]" />
+                        {isDrive ? (
+                          <Cloud className="w-5 h-5 text-[#00A6A6]" />
+                        ) : (
+                          <FileText className="w-5 h-5 text-[#00A6A6]" />
+                        )}
                         <span className="text-[10px] font-mono font-bold uppercase mt-0.5">
                           {file.fileExt}
                         </span>
                       </div>
                       <div className="min-w-0 space-y-1">
-                        <h2 className="font-display text-base sm:text-lg font-bold text-[#0B2545]">
-                          {file.title}
-                        </h2>
+                        <div className="flex items-center flex-wrap gap-2">
+                          <h2 className="font-display text-base sm:text-lg font-bold text-[#0B2545]">
+                            {file.title}
+                          </h2>
+                          {isDrive && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[#EAF4F7] text-[#0B2545] text-[11px] font-semibold">
+                              <Cloud className="w-3 h-3 text-[#00A6A6]" />
+                              Google Drive
+                            </span>
+                          )}
+                        </div>
                         {file.description && (
                           <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
                             {file.description}
@@ -558,7 +615,9 @@ export function LecturesExplorer({
                           )}
                           <span aria-hidden="true">·</span>
                           <span className="tabular-nums">
-                            {formatFileSizeArabic(file.fileSize)}
+                            {isDrive && (!file.fileSize || file.fileSize <= 0)
+                              ? 'رابط سحابي'
+                              : formatFileSizeArabic(file.fileSize)}
                           </span>
                         </div>
                       </div>
@@ -596,8 +655,10 @@ export function LecturesExplorer({
 
                       {downloadable ? (
                         <a
-                          href={`/api/files/download/${encodeURIComponent(file.id)}`}
-                          download={file.originalName}
+                          href={downloadHref}
+                          download={isDrive ? undefined : file.originalName}
+                          target={isDrive ? '_blank' : undefined}
+                          rel={isDrive ? 'noopener noreferrer' : undefined}
                           className="min-h-[42px] px-4 py-2 rounded-xl bg-[#00A6A6] hover:bg-[#008e8e] text-white text-xs sm:text-sm font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap"
                         >
                           <Download className="w-4 h-4" />

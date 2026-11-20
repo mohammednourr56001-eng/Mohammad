@@ -1,0 +1,34 @@
+# =============================================================================
+# UST Platform — Cloud Armor / Cloudflare WAF & DDoS Security Policy
+# =============================================================================
+policyName: ust-enterprise-waf-policy
+defaultAction: allow
+rateLimiting:
+  - name: auth-brute-force-shield
+    pathPrefix: /api/auth/
+    requestsPerMinute: 30
+    banDurationSeconds: 600
+    action: throttle_429
+  - name: exam-submission-burst-guard
+    pathPrefix: /api/exams/
+    requestsPerMinute: 60
+    action: throttle_429
+  - name: ai-generation-quota-guard
+    pathPrefix: /api/ai/
+    requestsPerMinute: 20
+    action: throttle_429
+  - name: global-api-ddos-protection
+    pathPrefix: /api/
+    requestsPerMinute: 600
+    action: challenge_or_429
+wafRules:
+  - id: owasp-sqli-xss-guard
+    description: Block SQL injection and XSS payloads on query/body parameters
+    mode: enforce
+  - id: bot-scraper-mitigation
+    description: Challenge headless scraping bursts on /api/files/download/*
+    mode: enforce
+securityHeaders:
+  Strict-Transport-Security: "max-age=31536000; includeSubDomains"
+  X-Content-Type-Options: "nosniff"
+  Referrer-Policy: "strict-origin-when-cross-origin"

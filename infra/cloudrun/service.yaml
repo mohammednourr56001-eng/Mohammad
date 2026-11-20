@@ -1,0 +1,37 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: ust-lecture-platform
+  annotations:
+    run.googleapis.com/ingress: all
+    run.googleapis.com/minScale: "2"
+    run.googleapis.com/maxScale: "60"
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "2"
+        autoscaling.knative.dev/maxScale: "60"
+        run.googleapis.com/cpu-throttling: "false"
+        run.googleapis.com/startup-cpu-boost: "true"
+    spec:
+      containerConcurrency: 120
+      timeoutSeconds: 60
+      containers:
+        - image: gcr.io/PROJECT_ID/ust-lecture-platform:latest
+          ports:
+            - containerPort: 3000
+          resources:
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+          startupProbe:
+            httpGet:
+              path: /api/readiness
+              port: 3000
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /api/liveness
+              port: 3000
+            periodSeconds: 15

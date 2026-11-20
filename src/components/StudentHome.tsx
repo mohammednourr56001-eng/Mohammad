@@ -3,6 +3,8 @@ import {
   ArrowLeft,
   Bell,
   BookOpen,
+  BrainCircuit,
+  Cloud,
   Download,
   Eye,
   FileText,
@@ -19,8 +21,10 @@ import {
   canPreviewInApp,
   formatFileSizeArabic,
   getCategoryLabel,
+  getGoogleDriveDownloadUrl,
   getPublishedSpecializations,
   getYearsForSpecialization,
+  isGoogleDriveFile,
 } from '../utils/academicLogic.ts';
 import { AcademicIcon } from './IconPicker.tsx';
 
@@ -29,12 +33,14 @@ export function StudentHome({
   onSelectSpecialization,
   onOpenSearch,
   onOpenNotifications,
+  onOpenExams,
   onPreviewFile,
 }: {
   onOpenLectures: () => void;
   onSelectSpecialization: (spec: Specialization) => void;
   onOpenSearch: (initialQuery?: string) => void;
   onOpenNotifications: () => void;
+  onOpenExams: () => void;
   onPreviewFile: (file: LectureFile) => void;
 }) {
   const { profile, isAdmin } = useAuth();
@@ -52,7 +58,9 @@ export function StudentHome({
 
   const publishedSpecs = getPublishedSpecializations(specializations);
   const featuredSpecs = publishedSpecs.slice(0, 3);
-  const publishedFiles = lectureFiles.filter((f) => f.status === 'published');
+  const publishedFiles = lectureFiles.filter(
+    (f) => f.status === 'published' && f.lifecycleStatus !== 'trashed' && f.specializationId !== 'central_unlinked'
+  );
   const recentFiles = [...publishedFiles]
     .sort((a, b) => {
       const ta = (a.createdAt as { seconds?: number })?.seconds || 0;
@@ -144,6 +152,15 @@ export function StudentHome({
                 <BookOpen className="w-5 h-5" />
                 المحاضرات
                 <ArrowLeft className="w-4 h-4" />
+              </button>
+
+              <button
+                type="button"
+                onClick={onOpenExams}
+                className="min-h-[46px] px-4 py-2.5 rounded-xl bg-[#00A6A6] hover:bg-[#008e8e] text-white text-xs sm:text-sm font-semibold inline-flex items-center gap-2 transition-colors whitespace-nowrap shrink-0"
+              >
+                <BrainCircuit className="w-4 h-4" />
+                الاختبارات الذكية
               </button>
 
               <button
@@ -259,8 +276,12 @@ export function StudentHome({
               {recentFiles.map((file) => {
                 const subject = subjects.find((s) => s.id === file.subjectId);
                 const spec = specializations.find((s) => s.id === file.specializationId);
-                const previewable = canPreviewInApp(file.fileExt, file.mimeType);
+                const isDrive = isGoogleDriveFile(file);
+                const previewable = canPreviewInApp(file.fileExt, file.mimeType, file);
                 const downloadable = canDownloadFile(file, isAdmin);
+                const downloadHref = isDrive
+                  ? getGoogleDriveDownloadUrl(file) || file.externalUrl || '#'
+                  : `/api/files/download/${encodeURIComponent(file.id)}`;
 
                 return (
                   <div
@@ -269,12 +290,23 @@ export function StudentHome({
                   >
                     <div className="flex items-start gap-3 min-w-0">
                       <div className="w-10 h-10 rounded-xl bg-[#EAF4F7] text-[#0B2545] flex items-center justify-center shrink-0">
-                        <FileText className="w-5 h-5" />
+                        {isDrive ? (
+                          <Cloud className="w-5 h-5 text-[#00A6A6]" />
+                        ) : (
+                          <FileText className="w-5 h-5" />
+                        )}
                       </div>
                       <div className="min-w-0">
-                        <h3 className="text-sm font-semibold text-[#0B2545] truncate">
-                          {file.title}
-                        </h3>
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <h3 className="text-sm font-semibold text-[#0B2545] truncate">
+                            {file.title}
+                          </h3>
+                          {isDrive && (
+                            <span className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#EAF4F7] text-[#0B2545] text-[10px] font-semibold">
+                              Drive
+                            </span>
+                          )}
+                        </div>
                         <p className="text-xs text-slate-500 mt-0.5 flex items-center gap-1.5 flex-wrap">
                           <span>{subject?.name || 'مقرر دراسي'}</span>
                           <span aria-hidden="true">·</span>
@@ -283,7 +315,9 @@ export function StudentHome({
                           <span>{getCategoryLabel(file.category)}</span>
                           <span aria-hidden="true">·</span>
                           <span className="tabular-nums">
-                            {formatFileSizeArabic(file.fileSize)}
+                            {isDrive && (!file.fileSize || file.fileSize <= 0)
+                              ? 'رابط سحابي'
+                              : formatFileSizeArabic(file.fileSize)}
                           </span>
                         </p>
                       </div>
@@ -303,8 +337,10 @@ export function StudentHome({
                       )}
                       {downloadable && (
                         <a
-                          href={`/api/files/download/${encodeURIComponent(file.id)}`}
-                          download={file.originalName}
+                          href={downloadHref}
+                          download={isDrive ? undefined : file.originalName}
+                          target={isDrive ? '_blank' : undefined}
+                          rel={isDrive ? 'noopener noreferrer' : undefined}
                           aria-label={`تحميل ${file.title}`}
                           className="min-h-[40px] min-w-[40px] rounded-xl border border-slate-200 hover:border-[#00A6A6] text-[#0B2545] hover:text-[#00A6A6] flex items-center justify-center transition-colors"
                         >

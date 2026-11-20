@@ -23,6 +23,7 @@ import {
   computeStorageAnalytics,
   evaluateStorageQuota,
   formatFileSizeArabic,
+  isGoogleDriveFile,
 } from '../utils/academicLogic.ts';
 
 export function StorageCapacityPanel({
@@ -123,7 +124,12 @@ export function StorageCapacityPanel({
     if (!canDeleteLectures) return;
     try {
       const token = await getIdToken();
-      if (token && file.storageName) {
+      if (
+        token &&
+        file.storageName &&
+        !isGoogleDriveFile(file) &&
+        !file.storageName.startsWith('gdrive_')
+      ) {
         await fetch(
           `/api/files/storage/${encodeURIComponent(file.storageName)}?fileId=${encodeURIComponent(file.id)}`,
           {

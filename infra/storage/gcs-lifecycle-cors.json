@@ -1,0 +1,39 @@
+{
+  "bucketPolicy": {
+    "uniformBucketLevelAccess": true,
+    "publicAccessPrevention": "enforced",
+    "cors": [
+      {
+        "origin": [
+          "https://*.pages.dev",
+          "https://*.run.app",
+          "http://localhost:3000"
+        ],
+        "method": ["GET", "HEAD", "PUT"],
+        "responseHeader": [
+          "Content-Type",
+          "Content-Length",
+          "ETag",
+          "X-UST-Checksum",
+          "Authorization"
+        ],
+        "maxAgeSeconds": 3600
+      }
+    ],
+    "lifecycle": {
+      "rule": [
+        {
+          "action": { "type": "AbortIncompleteMultipartUpload" },
+          "condition": { "age": 3 }
+        },
+        {
+          "action": { "type": "Delete" },
+          "condition": {
+            "matchesPrefix": ["backups/temp/"],
+            "age": 30
+          }
+        }
+      ]
+    }
+  }
+}

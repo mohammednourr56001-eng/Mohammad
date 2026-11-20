@@ -1,0 +1,36 @@
+{
+  "service": "ust-cdn-edge-policy",
+  "provider": "Cloudflare CDN / Google Cloud CDN",
+  "rules": [
+    {
+      "id": "cache_static_assets",
+      "match": "/assets/*",
+      "cacheLevel": "cache_everything",
+      "edgeTtlSeconds": 2592000,
+      "browserTtlSeconds": 2592000,
+      "compression": ["brotli", "gzip"]
+    },
+    {
+      "id": "cache_public_catalog",
+      "match": "/api/catalog/lectures*",
+      "cacheLevel": "standard",
+      "edgeTtlSeconds": 300,
+      "staleWhileRevalidateSeconds": 60,
+      "respectOriginCacheControl": true
+    },
+    {
+      "id": "bypass_auth_and_exams",
+      "match": "/api/(auth|admin|exams/submit|storage/direct-upload)/*",
+      "cacheLevel": "bypass",
+      "edgeTtlSeconds": 0
+    },
+    {
+      "id": "signed_cdn_lecture_downloads",
+      "match": "/api/cdn/signed-download*",
+      "cacheLevel": "standard",
+      "edgeTtlSeconds": 3600,
+      "requireSignedQueryToken": true,
+      "allowedQueryParams": ["fileId", "expires", "sig"]
+    }
+  ]
+}

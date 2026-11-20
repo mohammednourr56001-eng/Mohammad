@@ -1,0 +1,41 @@
+name: UST Platform CI/CD & Scaling Verification
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  verify-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run lint:rules
+      - run: npx tsx --test src/utils/academicLogic.test.ts src/utils/sharedCoursesLogic.test.ts src/utils/storageManager.test.ts server/scalabilityLogic.test.ts
+      - run: npm run build
+
+  deploy-cloudflare-pages-frontend:
+    needs: verify-and-test
+    if: github.ref == 'refs/heads/main' && vars.CLOUDFLARE_PAGES_PROJECT != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+      - run: npm ci
+      - run: npm run build
+      - name: Deploy dist/ to Cloudflare Pages Free
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy dist --project-name=${{ vars.CLOUDFLARE_PAGES_PROJECT }}

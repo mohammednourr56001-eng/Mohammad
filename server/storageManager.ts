@@ -4,6 +4,7 @@ import path from 'path';
 import { UPLOAD_DIR } from './seedPlatform.ts';
 
 export const UST_STORAGE_ROOT = path.resolve(process.cwd(), 'uploads', 'ust-storage');
+export const CENTRAL_STORAGE_DIR = path.join(UST_STORAGE_ROOT, 'central');
 export const SPECIALIZATIONS_STORAGE_DIR = path.join(UST_STORAGE_ROOT, 'specializations');
 export const TMP_STORAGE_DIR = path.join(UST_STORAGE_ROOT, 'tmp');
 export const BACKUPS_ROOT = path.join(UST_STORAGE_ROOT, 'backups');
@@ -13,6 +14,7 @@ export const INDEX_DIR = path.join(UST_STORAGE_ROOT, 'index');
 
 export function ensureStorageDirectories(): void {
   fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+  fs.mkdirSync(CENTRAL_STORAGE_DIR, { recursive: true });
   fs.mkdirSync(SPECIALIZATIONS_STORAGE_DIR, { recursive: true });
   fs.mkdirSync(TMP_STORAGE_DIR, { recursive: true });
   fs.mkdirSync(DB_BACKUPS_DIR, { recursive: true });
@@ -51,6 +53,23 @@ export function buildHierarchicalStorageLocation(params: {
   return { dirPath, fullPath, storagePath };
 }
 
+export function buildCentralStorageLocation(params: {
+  sha256?: string;
+  storageName: string;
+}): {
+  dirPath: string;
+  fullPath: string;
+  storagePath: string;
+} {
+  const shard = sanitizePathSegment((params.sha256 || '').slice(0, 16), 'library');
+  const safeName = path.basename(params.storageName);
+  const relDir = path.join('central', shard);
+  const dirPath = path.join(UST_STORAGE_ROOT, relDir);
+  const fullPath = path.join(dirPath, safeName);
+  const storagePath = `${relDir.split(path.sep).join('/')}/${safeName}`;
+  return { dirPath, fullPath, storagePath };
+}
+
 function findFileRecursively(rootDir: string, targetBasename: string): string | null {
   if (!fs.existsSync(rootDir)) return null;
   const entries = fs.readdirSync(rootDir, { withFileTypes: true });
@@ -76,6 +95,9 @@ export function resolvePhysicalFilePath(storageName: string, storagePath?: strin
       return candidate;
     }
   }
+
+  const foundInCentral = findFileRecursively(CENTRAL_STORAGE_DIR, safeName);
+  if (foundInCentral) return foundInCentral;
 
   const foundInHierarchy = findFileRecursively(SPECIALIZATIONS_STORAGE_DIR, safeName);
   if (foundInHierarchy) return foundInHierarchy;
@@ -118,13 +140,14 @@ export function computeDiskStorageUsage(): {
   backupsBytes: number;
 } {
   ensureStorageDirectories();
+  const centralStats = sumDirectoryBytes(CENTRAL_STORAGE_DIR);
   const legacyStats = sumDirectoryBytes(UPLOAD_DIR);
   const hierarchicalStats = sumDirectoryBytes(SPECIALIZATIONS_STORAGE_DIR);
   const backupStats = sumDirectoryBytes(BACKUPS_ROOT);
 
   return {
-    lecturesBytes: legacyStats.totalBytes + hierarchicalStats.totalBytes,
-    lecturesFileCount: legacyStats.fileCount + hierarchicalStats.fileCount,
+    lecturesBytes: centralStats.totalBytes + legacyStats.totalBytes + hierarchicalStats.totalBytes,
+    lecturesFileCount: centralStats.fileCount + legacyStats.fileCount + hierarchicalStats.fileCount,
     backupsBytes: backupStats.totalBytes,
   };
 }
@@ -161,6 +184,7 @@ export function listAllStoredLectureFiles(): Array<{
     }
   };
 
+  walk(CENTRAL_STORAGE_DIR, 'central');
   walk(SPECIALIZATIONS_STORAGE_DIR, 'specializations');
   walk(UPLOAD_DIR, 'legacy-lectures');
   return results;

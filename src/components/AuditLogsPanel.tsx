@@ -17,7 +17,7 @@ function formatLogTimestamp(raw: unknown): string {
 }
 
 export function AuditLogsPanel() {
-  const { activityLogs, refreshAuditLogs } = usePlatformData();
+  const { activityLogs, specializations, refreshAuditLogs } = usePlatformData();
   const [searchQuery, setSearchQuery] = useState('');
   const [resultFilter, setResultFilter] = useState<'all' | 'success' | 'denied' | 'failed'>('all');
   const [refreshing, setRefreshing] = useState(false);
@@ -32,6 +32,7 @@ export function AuditLogsPanel() {
         log.action.toLowerCase().includes(q) ||
         log.entityName.toLowerCase().includes(q) ||
         log.actorEmail.toLowerCase().includes(q) ||
+        (log.targetEmail || '').toLowerCase().includes(q) ||
         (log.actorName || '').toLowerCase().includes(q)
       );
     });
@@ -115,6 +116,9 @@ export function AuditLogsPanel() {
             ) : (
               filteredLogs.map((log) => {
                 const res = log.result || 'success';
+                const specLabel = log.specializationId
+                  ? specializations.find((s) => s.id === log.specializationId)?.name || log.specializationId
+                  : null;
                 return (
                   <tr key={log.id} className="hover:bg-slate-50/70">
                     <td className="p-3.5">
@@ -131,8 +135,24 @@ export function AuditLogsPanel() {
                       {log.details && (
                         <p className="text-[11px] font-normal text-slate-500 mt-0.5">{log.details}</p>
                       )}
+                      {(log.oldValue || log.newValue) && (
+                        <p className="text-[11px] font-normal text-slate-500 mt-0.5">
+                          {log.oldValue ? `من: ${log.oldValue}` : ''}{' '}
+                          {log.newValue ? `← إلى: ${log.newValue}` : ''}
+                        </p>
+                      )}
                     </td>
-                    <td className="p-3.5 text-xs text-slate-700">{log.entityName}</td>
+                    <td className="p-3.5 text-xs text-slate-700">
+                      <p>{log.entityName}</p>
+                      {log.targetEmail && (
+                        <p className="text-[11px] text-slate-500 font-mono">{log.targetEmail}</p>
+                      )}
+                      {specLabel && (
+                        <span className="inline-block mt-1 px-2 py-0.5 rounded bg-[#EAF4F7] text-[#0B2545] text-[10px] font-semibold">
+                          {specLabel}
+                        </span>
+                      )}
+                    </td>
                     <td className="p-3.5 text-xs">
                       <span
                         className={`inline-block px-2 py-0.5 rounded-md font-semibold ${

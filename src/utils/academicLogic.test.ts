@@ -11,12 +11,16 @@ import {
   evaluateStorageQuota,
   formatFileSizeArabic,
   getFilesForSubject,
+  getGoogleDriveDownloadUrl,
+  getGoogleDriveEmbedUrl,
   getPublishedSpecializations,
   getSemestersForYear,
   getSubjectsForSemester,
   getYearsForSpecialization,
   hasPermission,
+  isGoogleDriveFile,
   searchLecturesAndSubjects,
+  validateAndParseGoogleDriveUrl,
   validateUploadFile,
 } from './academicLogic';
 import {
@@ -218,12 +222,12 @@ test('RBAC hierarchy, Super Admin protection, and Moderator restrictions work st
     permissions: DEFAULT_ROLE_PERMISSIONS.admin,
     status: 'active',
   };
-  const moderatorUploadOnly: UserProfile = {
+  const moderatorRestricted: UserProfile = {
     uid: 'm1',
     email: 'mod@ust.edu',
     displayName: 'مشرف المحاضرات',
     role: 'moderator',
-    permissions: ['lectures.upload', 'lectures.edit'],
+    permissions: ['lectures.upload', 'lectures.edit', 'announcements.manage'],
     status: 'active',
   };
   const student: UserProfile = {
@@ -243,24 +247,25 @@ test('RBAC hierarchy, Super Admin protection, and Moderator restrictions work st
   assert.equal(canAccessAdminDashboard(null, false), false);
   assert.equal(canAccessAdminDashboard(student, false), false);
   assert.equal(canAccessAdminDashboard(suspendedAdmin, true), false);
-  assert.equal(canAccessAdminDashboard(moderatorUploadOnly, true), true);
+  assert.equal(canAccessAdminDashboard(moderatorRestricted, true), true);
   assert.equal(canAccessAdminDashboard(admin, true), true);
   assert.equal(canAccessAdminDashboard(superAdmin, true), true);
 
-  // TEST 2: Super Admin has all 20 permissions
+  // TEST 2: Super Admin has all permissions including upload
   for (const perm of ALL_PERMISSIONS) {
     assert.equal(hasPermission(superAdmin, perm), true);
   }
 
-  // TEST 5 & 8: Moderator upload-only is denied from users/roles/storage/delete specializations
-  assert.equal(hasPermission(moderatorUploadOnly, 'lectures.upload'), true);
-  assert.equal(hasPermission(moderatorUploadOnly, 'lectures.edit'), true);
-  assert.equal(hasPermission(moderatorUploadOnly, 'users.view'), false);
-  assert.equal(hasPermission(moderatorUploadOnly, 'roles.assign'), false);
-  assert.equal(hasPermission(moderatorUploadOnly, 'specializations.delete'), false);
-  assert.equal(hasPermission(moderatorUploadOnly, 'storage.manage'), false);
+  // Non-Super-Admin is ALWAYS denied lectures.upload / lectures.edit / roles.assign / storage.manage even if injected in profile
+  assert.equal(hasPermission(moderatorRestricted, 'lectures.upload'), false);
+  assert.equal(hasPermission(moderatorRestricted, 'lectures.edit'), false);
+  assert.equal(hasPermission(moderatorRestricted, 'announcements.manage'), true);
+  assert.equal(hasPermission(moderatorRestricted, 'users.view'), false);
+  assert.equal(hasPermission(moderatorRestricted, 'roles.assign'), false);
+  assert.equal(hasPermission(moderatorRestricted, 'specializations.delete'), false);
+  assert.equal(hasPermission(moderatorRestricted, 'storage.manage'), false);
 
-  // TEST 4 & 9: Super Admin can promote student to admin/moderator; regular admin cannot self-promote or touch Super Admin
+  // Only Super Admin can assign non-upload permissions; granting lectures.upload to non-Super-Admin is rejected
   assert.equal(
     canAssignRoleChange({ actor: superAdmin, target: student, nextRole: 'admin' }).allowed,
     true
@@ -268,6 +273,15 @@ test('RBAC hierarchy, Super Admin protection, and Moderator restrictions work st
   assert.equal(
     canAssignRoleChange({ actor: superAdmin, target: student, nextRole: 'moderator' }).allowed,
     true
+  );
+  assert.equal(
+    canAssignRoleChange({
+      actor: superAdmin,
+      target: student,
+      nextRole: 'admin',
+      nextPermissions: ['lectures.upload'],
+    }).allowed,
+    false
   );
   assert.equal(
     canAssignRoleChange({ actor: admin, target: admin, nextRole: 'super_admin' }).allowed,
@@ -278,7 +292,7 @@ test('RBAC hierarchy, Super Admin protection, and Moderator restrictions work st
     false
   );
   assert.equal(
-    canAssignRoleChange({ actor: moderatorUploadOnly, target: student, nextRole: 'moderator' }).allowed,
+    canAssignRoleChange({ actor: moderatorRestricted, target: student, nextRole: 'moderator' }).allowed,
     false
   );
 
@@ -348,4 +362,110 @@ test('search and formatting helpers behave deterministically', () => {
   );
   assert.equal(searchRes.files.length, 1);
   assert.equal(searchRes.files[0].id, 'f1');
+});
+
+test('Google Drive URL validation, parsing, embed/download resolution, and storage exclusion work securely', () => {
+  // Valid Drive file /file/d/<id>/view
+  const driveFile = validateAndParseGoogleDriveUrl(
+    'https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUvWxYz_12345/view?usp=sharing'
+  );
+  assert.equal(driveFile.valid, true);
+  assert.equal(driveFile.driveFileId, '1AbCdEfGhIjKlMnOpQrStUvWxYz_12345');
+  assert.equal(
+    driveFile.embedUrl,
+    'https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUvWxYz_12345/preview'
+  );
+  assert.equal(
+    driveFile.downloadUrl,
+    'https://drive.google.com/uc?export=download&id=1AbCdEfGhIjKlMnOpQrStUvWxYz_12345'
+  );
+
+  // Valid Drive ?id= link
+  const driveOpen = validateAndParseGoogleDriveUrl(
+    'https://drive.google.com/open?id=9XyZ_0123456789abcDEF'
+  );
+  assert.equal(driveOpen.valid, true);
+  assert.equal(driveOpen.driveFileId, '9XyZ_0123456789abcDEF');
+
+  // Valid Google Docs / Slides / Sheets links
+  const gdoc = validateAndParseGoogleDriveUrl(
+    'https://docs.google.com/document/d/doc_id_12345678/edit'
+  );
+  assert.equal(gdoc.valid, true);
+  assert.equal(gdoc.kind, 'document');
+  assert.equal(gdoc.inferredExt, 'gdoc');
+  assert.equal(gdoc.embedUrl, 'https://docs.google.com/document/d/doc_id_12345678/preview');
+  assert.equal(
+    gdoc.downloadUrl,
+    'https://docs.google.com/document/d/doc_id_12345678/export?format=pdf'
+  );
+
+  const gslides = validateAndParseGoogleDriveUrl(
+    'https://docs.google.com/presentation/d/slides_id_123456/edit'
+  );
+  assert.equal(gslides.valid, true);
+  assert.equal(gslides.inferredExt, 'gslides');
+
+  // Reject insecure/non-Google/empty URLs
+  assert.equal(validateAndParseGoogleDriveUrl('').valid, false);
+  assert.equal(
+    validateAndParseGoogleDriveUrl('http://drive.google.com/file/d/1AbCdEfGhIjKlMn/view').valid,
+    false
+  );
+  assert.equal(
+    validateAndParseGoogleDriveUrl('https://evil.example.com/file/d/1AbCdEfGhIjKlMn/view').valid,
+    false
+  );
+  assert.equal(validateAndParseGoogleDriveUrl('javascript:alert(1)').valid, false);
+
+  const driveLecture: LectureFile = {
+    id: 'f_drive_1',
+    specializationId: 'spec_bio',
+    academicYearId: 'y1',
+    semesterId: 'sem1',
+    subjectId: 'sub_phys',
+    title: 'محاضرة مرتبطة بـ Google Drive',
+    category: 'lectures_pdf',
+    sourceType: 'google_drive',
+    externalUrl: 'https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUvWxYz_12345/view',
+    driveFileId: '1AbCdEfGhIjKlMnOpQrStUvWxYz_12345',
+    fileName: 'drive_lecture.pdf',
+    originalName: 'drive_lecture.pdf',
+    fileExt: 'pdf',
+    mimeType: 'application/pdf',
+    fileSize: 5_000_000,
+    storageName: 'gdrive_1AbCdEfGhIjKlMnOpQrStUvWxYz_12345',
+    allowDownload: true,
+    status: 'published',
+    sortOrder: 4,
+    uploadedBy: 'admin1',
+  };
+
+  assert.equal(isGoogleDriveFile(driveLecture), true);
+  assert.equal(isGoogleDriveFile(files[0]), false);
+  assert.equal(canPreviewInApp(driveLecture.fileExt, driveLecture.mimeType, driveLecture), true);
+  assert.equal(
+    getGoogleDriveEmbedUrl(driveLecture),
+    'https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUvWxYz_12345/preview'
+  );
+  assert.equal(
+    getGoogleDriveDownloadUrl(driveLecture),
+    'https://drive.google.com/uc?export=download&id=1AbCdEfGhIjKlMnOpQrStUvWxYz_12345'
+  );
+
+  // Storage analytics must NOT count Drive-linked file toward local storage quota bytes
+  const analyticsWithoutDrive = computeStorageAnalytics({
+    files,
+    specializations: specs,
+    academicYears: years,
+    subjects,
+  });
+  const analyticsWithDrive = computeStorageAnalytics({
+    files: [...files, driveLecture],
+    specializations: specs,
+    academicYears: years,
+    subjects,
+  });
+  assert.equal(analyticsWithDrive.totalFiles, analyticsWithoutDrive.totalFiles + 1);
+  assert.equal(analyticsWithDrive.totalBytes, analyticsWithoutDrive.totalBytes);
 });

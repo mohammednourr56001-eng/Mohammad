@@ -1,12 +1,17 @@
 import React, { useEffect, useState } from 'react';
-import { Download, ExternalLink, FileText, Lock, X } from 'lucide-react';
+import { Download, ExternalLink, FilePlus2, FileText, Lock, WifiOff, X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
+import { useOnlineStatus } from '../hooks/useOnlineStatus.ts';
+import { createGoogleDoc } from '../utils/googleDocsApi.ts';
 import { LectureFile } from '../types/academic.ts';
 import {
   canDownloadFile,
   canPreviewInApp,
   formatFileSizeArabic,
   getCategoryLabel,
+  getGoogleDriveDownloadUrl,
+  getGoogleDriveEmbedUrl,
+  isGoogleDriveFile,
 } from '../utils/academicLogic.ts';
 
 export function FilePreviewModal({
@@ -16,9 +21,15 @@ export function FilePreviewModal({
   file: LectureFile | null;
   onClose: () => void;
 }) {
-  const { isAdmin, getIdToken } = useAuth();
-  const [token, setToken] = useState<string>('');
+  const { isAdmin, getIdToken, workspaceAccessToken, connectGoogleWorkspace } = useAuth();
+  const isOnline = useOnlineStatus();
+  const [signedUrls, setSignedUrls] = useState<{
+    viewUrl: string;
+    downloadUrl: string;
+  } | null>(null);
   const [extractedLines, setExtractedLines] = useState<string[] | null>(null);
+  const [savingToDocs, setSavingToDocs] = useState(false);
+  const [docsStatus, setDocsStatus] = useState<{ msg: string; url?: string } | null>(null);
   const [viewMode, setViewMode] = useState<'pdf' | 'reader'>(() => {
     if (typeof navigator !== 'undefined' && navigator.pdfViewerEnabled === false) {
       return 'reader';
@@ -28,18 +39,38 @@ export function FilePreviewModal({
 
   useEffect(() => {
     let active = true;
+    setSignedUrls(null);
     setExtractedLines(null);
-    if (file) {
+    setDocsStatus(null);
+    if (file && !isGoogleDriveFile(file)) {
       const supportsNativePdf =
         typeof navigator !== 'undefined' && navigator.pdfViewerEnabled !== false;
       setViewMode(supportsNativePdf ? 'pdf' : 'reader');
 
       getIdToken()
-        .then((t) => {
-          if (active && t) setToken(t);
+        .then(async (t) => {
+          const headers: Record<string, string> = {};
+          if (t) headers.Authorization = `Bearer ${t}`;
+
+          const tokenRes = await fetch(`/api/files/preview-token/${encodeURIComponent(file.id)}`, {
+            headers,
+          });
+          if (tokenRes.ok && active) {
+            const payload = (await tokenRes.json()) as {
+              viewUrl?: string;
+              downloadUrl?: string;
+              extractUrl?: string;
+            };
+            if (payload.viewUrl && payload.downloadUrl) {
+              setSignedUrls({
+                viewUrl: payload.viewUrl,
+                downloadUrl: payload.downloadUrl,
+              });
+            }
+          }
+
           if (file.fileExt.toLowerCase() === 'pdf') {
-            const q = t ? `?token=${encodeURIComponent(t)}` : '';
-            fetch(`/api/files/extract/${encodeURIComponent(file.id)}${q}`)
+            fetch(`/api/files/extract/${encodeURIComponent(file.id)}`, { headers })
               .then((res) => (res.ok ? res.json() : null))
               .then((data) => {
                 if (active && data?.lines) {
@@ -68,13 +99,58 @@ export function FilePreviewModal({
 
   if (!file) return null;
 
-  const tokenQuery = token ? `?token=${encodeURIComponent(token)}` : '';
-  const viewUrl = `/api/files/view/${encodeURIComponent(file.id)}${tokenQuery}`;
-  const downloadUrl = `/api/files/download/${encodeURIComponent(file.id)}${tokenQuery}`;
-  const isImage = ['jpg', 'jpeg', 'png', 'webp'].includes(file.fileExt.toLowerCase());
-  const isPdf = file.fileExt.toLowerCase() === 'pdf';
-  const previewable = canPreviewInApp(file.fileExt, file.mimeType);
+  const isDrive = isGoogleDriveFile(file);
+  const viewUrl = isDrive
+    ? getGoogleDriveEmbedUrl(file) || file.externalUrl || ''
+    : signedUrls?.viewUrl || `/api/files/view/${encodeURIComponent(file.id)}`;
+  const externalOpenUrl = isDrive ? file.externalUrl || viewUrl : viewUrl;
+  const downloadUrl = isDrive
+    ? getGoogleDriveDownloadUrl(file) || externalOpenUrl
+    : signedUrls?.downloadUrl || `/api/files/download/${encodeURIComponent(file.id)}`;
+  const isImage = !isDrive && ['jpg', 'jpeg', 'png', 'webp'].includes(file.fileExt.toLowerCase());
+  const isPdf = !isDrive && file.fileExt.toLowerCase() === 'pdf';
+  const previewable = canPreviewInApp(file.fileExt, file.mimeType, file);
   const downloadable = canDownloadFile(file, isAdmin);
+
+  const handleSaveToGoogleDocs = async () => {
+    setSavingToDocs(true);
+    setDocsStatus(null);
+    try {
+      const accessToken = workspaceAccessToken || (await connectGoogleWorkspace());
+      if (!accessToken) {
+        setSavingToDocs(false);
+        return;
+      }
+      const bodyLines = [
+        `منصة UST للمحاضرات — ملاحظات المقرر`,
+        `العنوان: ${file.title}`,
+        `التصنيف: ${getCategoryLabel(file.category)}`,
+        file.description ? `الوصف: ${file.description}` : '',
+        '',
+        extractedLines && extractedLines.length > 0
+          ? extractedLines.join('\n')
+          : 'أضف ملاحظاتك وملخصك لهذه المحاضرة هنا.',
+      ]
+        .filter(Boolean)
+        .join('\n');
+
+      const created = await createGoogleDoc(
+        accessToken,
+        `ملاحظات: ${file.title}`,
+        bodyLines
+      );
+      setDocsStatus({
+        msg: 'تم حفظ المحاضرة في Google Docs بنجاح',
+        url: created.webViewLink,
+      });
+    } catch (err) {
+      setDocsStatus({
+        msg: err instanceof Error ? err.message : 'تعذر الحفظ في Google Docs.',
+      });
+    } finally {
+      setSavingToDocs(false);
+    }
+  };
 
   return (
     <div
@@ -102,7 +178,7 @@ export function FilePreviewModal({
             </p>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex flex-wrap items-center gap-2">
             {isPdf && (
               <div className="flex items-center gap-1 p-1 bg-white/10 rounded-xl">
                 <button
@@ -133,7 +209,9 @@ export function FilePreviewModal({
             {downloadable ? (
               <a
                 href={downloadUrl}
-                download={file.originalName}
+                download={isDrive ? undefined : file.originalName}
+                target={isDrive ? '_blank' : undefined}
+                rel={isDrive ? 'noopener noreferrer' : undefined}
                 className="min-h-[40px] px-4 py-2 rounded-xl bg-[#00A6A6] hover:bg-[#008e8e] text-white text-xs sm:text-sm font-semibold inline-flex items-center gap-2 transition-colors whitespace-nowrap shrink-0"
               >
                 <Download className="w-4 h-4" />
@@ -145,14 +223,24 @@ export function FilePreviewModal({
                 للمعاينة فقط
               </span>
             )}
+            <button
+              type="button"
+              onClick={handleSaveToGoogleDocs}
+              disabled={savingToDocs}
+              className="min-h-[40px] px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 disabled:opacity-60"
+            >
+              <FilePlus2 className="w-4 h-4 text-[#00A6A6]" />
+              {savingToDocs ? 'جاري الحفظ...' : 'حفظ في Google Docs'}
+            </button>
             <a
-              href={viewUrl}
+              href={externalOpenUrl}
               target="_blank"
               rel="noopener noreferrer"
-              aria-label="فتح في نافذة مستقلة"
-              className="min-h-[40px] min-w-[40px] rounded-xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors"
+              aria-label={isDrive ? 'فتح في Google Drive' : 'فتح في نافذة مستقلة'}
+              className="min-h-[40px] px-3 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
             >
               <ExternalLink className="w-4 h-4" />
+              {isDrive && <span className="hidden sm:inline">Google Drive</span>}
             </a>
             <button
               type="button"
@@ -165,8 +253,40 @@ export function FilePreviewModal({
           </div>
         </header>
 
+        {docsStatus && (
+          <div
+            role="status"
+            className="px-5 py-2.5 bg-[#EAF4F7] border-b border-slate-200 flex items-center justify-between gap-3 text-xs font-semibold text-[#0B2545]"
+          >
+            <span>{docsStatus.msg}</span>
+            {docsStatus.url && (
+              <a
+                href={docsStatus.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[#00A6A6] underline inline-flex items-center gap-1 shrink-0"
+              >
+                فتح المستند في Google Docs
+                <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+            )}
+          </div>
+        )}
+
         <div className="flex-1 bg-[#EAF4F7] overflow-y-auto flex items-center justify-center">
-          {previewable ? (
+          {!isOnline && (!extractedLines || viewMode !== 'reader' || isDrive) ? (
+            <div className="max-w-md text-center p-8 bg-white rounded-2xl border border-slate-200 m-4 shadow-sm space-y-3">
+              <div className="w-14 h-14 mx-auto rounded-2xl bg-[#EAF4F7] text-[#FF8066] flex items-center justify-center">
+                <WifiOff className="w-7 h-7" />
+              </div>
+              <h3 className="font-display text-lg font-bold text-[#0B2545]">
+                أنت غير متصل بالإنترنت حالياً
+              </h3>
+              <p className="text-sm text-slate-600 leading-relaxed">
+                قوائم المحاضرات وتفضيلاتك متاحة محلياً، بينما يتطلب عرض أو تحميل هذا الملف اتصالاً بالإنترنت.
+              </p>
+            </div>
+          ) : previewable ? (
             isImage ? (
               <img
                 src={viewUrl}
@@ -174,7 +294,7 @@ export function FilePreviewModal({
                 referrerPolicy="no-referrer"
                 className="max-w-full max-h-full object-contain p-4"
               />
-            ) : viewMode === 'pdf' ? (
+            ) : isDrive || viewMode === 'pdf' ? (
               <iframe
                 src={viewUrl}
                 title={file.title}
